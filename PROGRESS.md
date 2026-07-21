@@ -41,6 +41,12 @@ C:\Users\Q\code\z-core\docs\vendor\um0050.pdf 2922169
 
 ## Phase 1 — Conformance apparatus
 
+### P1.1 — Z80 SingleStepTests submodule
+
+- Repository: https://github.com/SingleStepTests/z80
+- Path: `tests/sst`
+- Pinned commit: `ebe1875d48f374bcfd4b505d8eb8ee751568b5f7`
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
