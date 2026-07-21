@@ -1184,6 +1184,39 @@ The format check completed successfully with no output. Gate G4 remains in
 progress; Phase 4 task 4, the hand-computed timing spot-check suite, is the
 next unchecked plan item.
 
+### P4.4 — hand-computed timing spot checks (2026-07-21)
+
+The core timing tests now contain 26 explicit short programs whose totals are
+hand-computed from instruction base states plus reset-state DCNTL waits and
+asserted through `cycle_count()`. Coverage includes fixed register and memory
+forms; JR, DJNZ, JP, CALL, and RET taken/untaken paths; EX DE,HL, EXX, and
+EX (SP),HL; MLT; LDI; terminal and repeating LDIR; OTIM and internally
+repeating OTIMR; and external input/output.
+
+The exact spot-check test and the complete timing gate pass:
+
+```text
+> cargo test -p z180-core timing_spot_checks_hand_computed_program_totals
+1 passed; 0 failed
+
+> cargo test -p z180-core timing
+6 passed; 0 failed
+
+> cargo test --workspace
+z180-cli: 15 passed; 0 failed
+z180-core: 27 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo]
+
+> cargo fmt --all -- --check
+```
+
+The format check completed successfully with no output. Gate G4 remains in
+progress; Phase 4 task 5, the full ZEXDOC run, is the next unchecked plan
+item.
+
 ## Phase 5 — Interrupts, MMU, internal I/O window
 
 ## Phase 6 — On-chip peripherals
