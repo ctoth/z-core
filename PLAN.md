@@ -625,11 +625,17 @@ Tasks:
    will hit UNIMPLEMENTED opcodes; the harness must report that cleanly, not
    crash).
 7. **z180-sst runner mode**: `z180-cli sst --dir tests/z180-sst` shares all
-   runner code with task 3, loads the Appendix C `z180` state, supplies the
-   recorded deterministic port reads, compares port writes and F through the
-   case's `flags_mask`, dispatches
-   `instruction`/`trap`/`mmu` case kinds (including all 16 MMU probes), and
-   adds a `--census` report of case counts per opcode and special family.
+   runner code with task 3, deserializes and validates the complete Appendix C
+   schema (including `z180`, `ports`, and all 16 MMU probes), dispatches the
+   `instruction`/`trap`/`mmu` case kinds, provides a scripted `HostBus` for
+   deterministic port reads and recorded writes, compares F through the
+   case's `flags_mask` when a case executes, and adds a `--census` report of
+   case counts per opcode and special family. In Phase 1 every z180-sst case
+   remains UNIMPLEMENTED: the runner does not inject or compare Appendix C
+   `z180` state yet. Do not add a privileged SST-only setter or adapter.
+   Phase 3 activates instruction/TRAP execution from reset state through the
+   owning CPU/TRAP interfaces; Phase 5 activates MMU execution by programming
+   CBR/BBR/CBAR through the real internal-I/O instruction path.
 
 **GATE G1** (all pasted):
 - `z180-cli sst --dir tests/sst/v1 --only 00,76,40..7f` → PASS for all
@@ -675,6 +681,12 @@ Tasks:
    TRAP.
 5. TRAP mechanism per 3.4, including UFO adjustment and Event::Trap.
 6. NEG, RRD/RLD, and the block ops' flag subtleties from the UM tables.
+7. Activate the z180-sst `instruction` and `trap` families. Require their
+   initial `z180` fields to equal reset state rather than injecting them.
+   Supply and verify their scripted port events, compare masked F and base CPU
+   state, and compare resulting ITC and SLP state through the owning public
+   interfaces implemented in this phase. Leave the `mmu` family
+   UNIMPLEMENTED.
 
 **GATE G3:**
 - `z180-cli sst --dir tests/sst/v1` → all documented files PASS, zero FAIL,
@@ -717,6 +729,10 @@ Tasks:
    OUT0/TSTIO/OTIM-family routing, 16-bit port decode rule per UM.
 2. MMU (3.3): translation array, CBR/BBR/BAR writes, `mmu_translate`
    accessor. All instruction fetches and memory operands now translate.
+   Activate the z180-sst `mmu` family by executing ordinary internal-I/O
+   instructions to program CBR/BBR/CBAR, then run and compare all 16 probes
+   and resulting `z180` state. Do not bypass the internal-I/O instruction
+   path with a runner-only setter.
 3. Interrupt machinery (3.7): IM0 (treat bus vector as RST 38h unless a
    mode-0 vector API is added — document choice), IM1, IM2, NMI, TRAP
    priority, INT1/INT2 + internal vectoring via I:IL, ITC enables, EI

@@ -211,6 +211,32 @@ Doc-tests z180_core: 0 passed; 0 failed
 
 The final format check completed successfully with no output.
 
+### P1.7 state-load blocker — RESOLVED (2026-07-20)
+
+P1.7 requires the shared SST runner to load Appendix C's
+`itc/cbr/bbr/cbar/sleeping` initial state and compare the resulting Z180 state.
+The plan's immutable core API names only read-only `io_reg_peek` and
+`mmu_translate` visibility; neither is implemented yet, and the API names no
+setter or complete conformance-state load/capture mechanism. The current core
+also has no separate ITC/MMU/sleep fields to load. MMU register implementation
+is ordered later in Phase 5.
+
+Deterministic port reads/writes can be implemented CLI-locally through a shared
+`HostBus`, but that does not solve the missing Z180 control-state mechanism.
+Deserializing the fields while ignoring them, relying on today's reset-valued
+initial corpus, adding an unplanned `io_reg_poke`/test setter/snapshot adapter,
+or deferring the requirement to Phase 5 would each substitute for the literal
+P1.7 instruction.
+
+Resolution: the controlling plan now defers injection and comparison of the
+Appendix C `z180` state to the owning implementation phases. P1.7 validates
+the complete schema, dispatches all three families, provides deterministic
+port scripting, and reports the census while every generated case remains
+UNIMPLEMENTED. Phase 3 activates instruction/TRAP cases from reset state and
+compares ITC/SLP through their owning public interfaces. Phase 5 activates MMU
+cases by programming CBR/BBR/CBAR through the real internal-I/O instruction
+path. No privileged SST-only setter or adapter is authorized.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
