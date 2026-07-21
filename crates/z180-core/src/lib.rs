@@ -998,6 +998,9 @@ impl<B: HostBus> Z180<B> {
                     let mut flags = if value & 0x80 != 0 { FLAG_N } else { 0 };
                     if next_b == 0 {
                         flags |= FLAG_Z;
+                        if repeat {
+                            flags |= FLAG_PV;
+                        }
                     }
                     self.set_flags(flags);
                     if !repeat || next_b == 0 {
@@ -1070,13 +1073,40 @@ impl<B: HostBus> Z180<B> {
                 };
                 self.registers.set(Reg::BC, u16::from_be_bytes([next_b, c]));
                 let delta = if decrement { u16::MAX } else { 1 };
-                self.registers.set(Reg::HL, address.wrapping_add(delta));
-                let mut flags = FLAG_N;
-                if next_b == 0 {
-                    flags |= FLAG_Z;
+                let next_hl = address.wrapping_add(delta);
+                self.registers.set(Reg::HL, next_hl);
+                let adjustment = if input {
+                    c.wrapping_add(if decrement { u8::MAX } else { 1 })
+                } else {
+                    next_hl.to_le_bytes()[0]
+                };
+                let flag_sum = u16::from(value) + u16::from(adjustment);
+                let mut flags = Self::sign_zero_xy(next_b);
+                if value & 0x80 != 0 {
+                    flags |= FLAG_N;
                 }
-                if value & 0x80 == 0 {
-                    flags &= !FLAG_N;
+                if flag_sum > u16::from(u8::MAX) {
+                    flags |= FLAG_H | FLAG_C;
+                }
+                flags |= Self::parity_flag((flag_sum.to_le_bytes()[0] & 0x07) ^ next_b);
+                if repeat && next_b != 0 {
+                    let parity_input = if flags & FLAG_C != 0 {
+                        flags &= !FLAG_H;
+                        if flags & FLAG_N != 0 {
+                            if next_b & 0x0f == 0 {
+                                flags |= FLAG_H;
+                            }
+                            next_b.wrapping_sub(1) & 0x07
+                        } else {
+                            if next_b & 0x0f == 0x0f {
+                                flags |= FLAG_H;
+                            }
+                            next_b.wrapping_add(1) & 0x07
+                        }
+                    } else {
+                        next_b & 0x07
+                    };
+                    flags ^= Self::parity_flag(parity_input) ^ FLAG_PV;
                 }
                 self.set_flags(flags);
                 if repeat && next_b != 0 {
@@ -1714,6 +1744,29 @@ mod tests {
         assert!(!cpu.iff2());
         assert_eq!(cpu.interrupt_mode(), 0);
         assert_eq!(cpu.mem_peek(0x4000), 0xcc);
+    }
+
+    #[test]
+    fn z180_repeat_block_output_sets_terminal_flags() {
+        let cases: [(u8, u16, u16, u16, u8); 2] = [
+            (0x93, 0x2000, 0x2001, 0x2002, 0x12),
+            (0x9b, 0x2001, 0x2000, 0x1fff, 0x0e),
+        ];
+        for (opcode, initial_hl, final_value_address, final_hl, final_c) in cases {
+            let mut cpu = machine();
+            cpu.mem_poke(0, 0xed);
+            cpu.mem_poke(1, opcode);
+            cpu.mem_poke(initial_hl.into(), 0x01);
+            cpu.mem_poke(final_value_address.into(), 0x80);
+            cpu.set_reg(Reg::AF, 0x55ff);
+            cpu.set_reg(Reg::BC, 0x0210);
+            cpu.set_reg(Reg::HL, initial_hl);
+
+            assert_eq!(cpu.step(), 1, "ED {opcode:02x}");
+            assert_eq!(cpu.reg(Reg::AF), 0x5546, "ED {opcode:02x}");
+            assert_eq!(cpu.reg(Reg::BC), u16::from(final_c), "ED {opcode:02x}");
+            assert_eq!(cpu.reg(Reg::HL), final_hl, "ED {opcode:02x}");
+        }
     }
 
     #[test]

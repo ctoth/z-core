@@ -966,6 +966,72 @@ Doc-tests z180_core: 0 passed; 0 failed
 The format check completed successfully with no output. Phase 3 task 6 is the
 next unchecked plan item.
 
+### P3.6 — ED flag subtleties (2026-07-21)
+
+Direct page-image reading of UM0050 Tables 38, 39, 43, and 46 confirmed that
+the existing NEG, RLD/RRD, block-transfer, and block-search documented flags
+were already correct. Table 46 defines standard block-I/O Z from decremented B
+and N from the transferred byte's most-significant bit, but marks S/H/P/V/C
+undefined. The verification log now labels z-core's deterministic free choice
+for those flags: the conventional standard-corpus formula for single transfers
+plus the pinned H/P/V correction during a nonterminal repeat.
+
+The first formula made all four nonrepeat files pass but exposed the distinct
+repeat correction:
+
+```text
+SUMMARY pass=5037 fail=2963 unimplemented=0 excluded=0
+```
+
+After applying the repeat correction in the existing ED block-I/O branch, the
+same eight-file selection passed:
+
+```text
+PASS ed a2: pass=1000 fail=0 unimplemented=0
+PASS ed a3: pass=1000 fail=0 unimplemented=0
+PASS ed aa: pass=1000 fail=0 unimplemented=0
+PASS ed ab: pass=1000 fail=0 unimplemented=0
+PASS ed b2: pass=1000 fail=0 unimplemented=0
+PASS ed b3: pass=1000 fail=0 unimplemented=0
+PASS ed ba: pass=1000 fail=0 unimplemented=0
+PASS ed bb: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=8000 fail=0 unimplemented=0 excluded=0
+```
+
+The broader selection covering every P3.6 standard family passed:
+
+```text
+SUMMARY pass=19000 fail=0 unimplemented=0 excluded=0
+```
+
+The full standard corpus now has no failures or unimplemented cases:
+
+```text
+SUMMARY pass=697000 fail=0 unimplemented=0 excluded=907
+```
+
+Table 46 separately requires terminal OTIMR/OTDMR to set P/V. The core now
+sets it on the final transfer, and a two-direction regression pins Z/P/V/N set
+with S/H/C reset:
+
+```text
+> cargo test -p z180-core z180_repeat_block_output
+1 passed; 0 failed
+
+> cargo test --workspace
+z180-cli: 13 passed; 0 failed
+z180-core: 20 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+
+> cargo fmt --check
+```
+
+The format check completed successfully with no output. Phase 3 task 7 is the
+next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window
