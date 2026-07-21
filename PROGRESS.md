@@ -1032,6 +1032,47 @@ Doc-tests z180_core: 0 passed; 0 failed
 The format check completed successfully with no output. Phase 3 task 7 is the
 next unchecked plan item.
 
+### P3.7 — generated instruction and TRAP suites (2026-07-21)
+
+The generated SST runner now executes `instruction` and `trap` cases through
+the ordinary single-step path. It requires their initial Z180 fields to equal
+reset state instead of injecting them, supplies and verifies their scripted
+port events, compares base CPU state with the case-specific F mask, and
+compares final ITC and SLP state through `Z180::itc()` and
+`Z180::sleeping()`. The `mmu` family remains explicitly UNIMPLEMENTED for
+Phase 5.
+
+Gate G3 passed in full:
+
+```text
+> z180-cli sst --dir tests/sst/v1
+SUMMARY pass=697000 fail=0 unimplemented=0 excluded=907
+
+> z180-cli sst --dir tests/z180-sst
+SUMMARY pass=6850 fail=0 unimplemented=200 excluded=0
+
+> cargo test -p z180-core trap
+2 passed; 0 failed
+```
+
+The 200 generated UNIMPLEMENTED cases are exactly the deferred MMU suite.
+Repository-wide regression and quality gates also pass:
+
+```text
+> cargo test --workspace
+z180-cli: 15 passed; 0 failed
+z180-core: 20 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+
+> cargo fmt --all -- --check
+```
+
+The format check completed successfully with no output. Gate G3 is complete;
+Phase 4 task 1 is the next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window

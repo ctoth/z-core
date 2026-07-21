@@ -255,14 +255,19 @@ pub(crate) fn run(args: SstArgs) -> Result<()> {
             });
         }
 
-        if generated_kind.is_some() {
-            report.push(FileReport {
-                file: stem,
-                pass: 0,
-                fail: 0,
-                unimplemented: cases.len(),
-                failures: Vec::new(),
-            });
+        if let Some(kind) = generated_kind {
+            match kind {
+                CaseKind::Instruction | CaseKind::Trap => {
+                    report.push(run_file(stem, cases, args.ignore_r, args.sabotage_ld)?);
+                }
+                CaseKind::Mmu => report.push(FileReport {
+                    file: stem,
+                    pass: 0,
+                    fail: 0,
+                    unimplemented: cases.len(),
+                    failures: Vec::new(),
+                }),
+            }
             continue;
         }
 
@@ -412,6 +417,22 @@ fn validate_generated_case(
 
     validate_generated_state(&location, "initial", &case.initial)?;
     validate_generated_state(&location, "final", &case.final_state)?;
+
+    if matches!(kind, CaseKind::Instruction | CaseKind::Trap) {
+        let initial_z180 = case
+            .initial
+            .z180
+            .as_ref()
+            .expect("generated state validation requires z180 state");
+        if initial_z180.itc != 0x01
+            || initial_z180.cbr != 0
+            || initial_z180.bbr != 0
+            || initial_z180.cbar != 0xf0
+            || initial_z180.sleeping
+        {
+            bail!("{location}.initial.z180 must equal reset state");
+        }
+    }
 
     match (kind, &case.mmu_probes) {
         (CaseKind::Mmu, Some(probes)) => validate_mmu_probes(&location, probes)?,
@@ -638,6 +659,25 @@ fn compare(cpu: &Z180<ScriptedBus>, case: &TestCase, ignore_r: bool) -> Option<F
         });
     }
 
+    if let Some(expected_z180) = &expected.z180 {
+        let z180_checks = [
+            difference_u8("z180.itc", expected_z180.itc, cpu.itc()),
+            difference_u8(
+                "z180.sleeping",
+                u8::from(expected_z180.sleeping),
+                u8::from(cpu.sleeping()),
+            ),
+        ];
+        if let Some(difference) = z180_checks.into_iter().flatten().next() {
+            return Some(Failure {
+                test: case.name.clone(),
+                field: difference.field.to_owned(),
+                expected: difference.expected,
+                actual: difference.actual,
+            });
+        }
+    }
+
     for [address, expected_value] in &expected.ram {
         let actual = cpu.mem_peek(u32::from(*address));
         if u16::from(actual) != *expected_value {
@@ -855,6 +895,41 @@ mod tests {
             validate_generated_cases("mmu", &[mmu]).expect("valid MMU schema"),
             Some(CaseKind::Mmu)
         );
+    }
+
+    #[test]
+    fn generated_instruction_requires_reset_z180_state() {
+        let mut instruction = generated_case(CaseKind::Instruction, None);
+        instruction
+            .initial
+            .z180
+            .as_mut()
+            .expect("generated z180 state")
+            .itc = 0x81;
+
+        let error = validate_generated_cases("ed00", &[instruction])
+            .expect_err("non-reset initial z180 state must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("initial.z180 must equal reset state")
+        );
+    }
+
+    #[test]
+    fn generated_comparison_includes_itc_and_sleeping() {
+        let (cpu, _) = machine(Vec::new()).expect("valid test machine");
+        let mut case = generated_case(CaseKind::Instruction, None);
+        let expected_z180 = case
+            .final_state
+            .z180
+            .as_mut()
+            .expect("generated z180 state");
+        expected_z180.itc = 0x81;
+        expected_z180.sleeping = true;
+
+        let failure = compare(&cpu, &case, false).expect("ITC mismatch must fail");
+        assert_eq!(failure.field, "z180.itc");
     }
 
     fn standard_case(name: &str, final_state: TestState) -> TestCase {
