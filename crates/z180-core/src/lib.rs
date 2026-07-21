@@ -5,11 +5,13 @@ extern crate alloc;
 
 use alloc::{collections::VecDeque, vec::Vec};
 
+mod disassembler;
 mod ioregs;
 mod memory;
 mod optable;
 mod registers;
 
+pub use disassembler::{DisassembledInstruction, disassemble_one};
 pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 

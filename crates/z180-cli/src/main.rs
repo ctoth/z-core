@@ -1,3 +1,4 @@
+mod dis;
 mod sst;
 mod zex;
 
@@ -14,6 +15,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Disassemble a raw Z180 binary.
+    Dis(dis::DisArgs),
     /// Run SingleStepTests JSON conformance cases.
     Sst(sst::SstArgs),
     /// Run a CP/M ZEX instruction exerciser image.
@@ -22,6 +25,7 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Dis(args) => dis::run(args),
         Command::Sst(args) => sst::run(args),
         Command::Zex(args) => zex::run(args),
     }

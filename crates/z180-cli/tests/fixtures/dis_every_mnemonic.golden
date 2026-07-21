@@ -1,0 +1,77 @@
+4000  88          ADC A,B
+4001  80          ADD A,B
+4002  A0          AND B
+4003  CB 40       BIT 0,B
+4005  CD 34 12    CALL 1234h
+4008  3F          CCF
+4009  B8          CP B
+400A  ED A9       CPD
+400C  ED B9       CPDR
+400E  ED A1       CPI
+4010  ED B1       CPIR
+4012  2F          CPL
+4013  27          DAA
+4014  05          DEC B
+4015  F3          DI
+4016  10 FE       DJNZ 4016h
+4018  FB          EI
+4019  08          EX AF,AF'
+401A  D9          EXX
+401B  76          HALT
+401C  ED 46       IM 0
+401E  DB 12       IN A,(12h)
+4020  ED 00 12    IN0 B,(12h)
+4023  04          INC B
+4024  ED AA       IND
+4026  ED BA       INDR
+4028  ED A2       INI
+402A  ED B2       INIR
+402C  C3 34 12    JP 1234h
+402F  18 FE       JR 402Fh
+4031  3E 42       LD A,42h
+4033  ED A8       LDD
+4035  ED B8       LDDR
+4037  ED A0       LDI
+4039  ED B0       LDIR
+403B  ED 4C       MLT BC
+403D  ED 44       NEG
+403F  00          NOP
+4040  B0          OR B
+4041  ED 8B       OTDM
+4043  ED 9B       OTDMR
+4045  ED BB       OTDR
+4047  ED 83       OTIM
+4049  ED 93       OTIMR
+404B  ED B3       OTIR
+404D  D3 12       OUT (12h),A
+404F  ED 01 12    OUT0 (12h),B
+4052  ED AB       OUTD
+4054  ED A3       OUTI
+4056  C1          POP BC
+4057  C5          PUSH BC
+4058  CB 80       RES 0,B
+405A  C9          RET
+405B  ED 4D       RETI
+405D  ED 45       RETN
+405F  CB 10       RL B
+4061  17          RLA
+4062  CB 00       RLC B
+4064  07          RLCA
+4065  ED 6F       RLD
+4067  CB 18       RR B
+4069  1F          RRA
+406A  CB 08       RRC B
+406C  0F          RRCA
+406D  ED 67       RRD
+406F  C7          RST 00h
+4070  98          SBC A,B
+4071  37          SCF
+4072  CB C0       SET 0,B
+4074  CB 20       SLA B
+4076  ED 76       SLP
+4078  CB 28       SRA B
+407A  CB 38       SRL B
+407C  90          SUB B
+407D  ED 04       TST B
+407F  ED 74 12    TSTIO 12h
+4082  A8          XOR B

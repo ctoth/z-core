@@ -2297,6 +2297,94 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 The formatting check and `git diff --check` completed with no output.
 
+### P7.3 — Optable-driven disassembler
+
+`z180-core::disassemble_one` now decodes all seven opcode pages directly from
+the private optables and returns address, encoded bytes, length, and formatted
+text. Standard and Z180 ED mnemonics are concrete optable metadata rather than
+a non-renderable placeholder. Immediate values, relative targets, register
+fields, restart vectors, and signed IX/IY displacements are formatted from the
+descriptor operands and encoded bytes; undefined or truncated input produces
+bounded `DB` records so every nonempty byte stream advances by one through four
+bytes without panicking.
+
+`z180-cli dis file.bin --org 0x0000` reads a raw binary and prints stable
+address, byte, and instruction columns. The checked-in crafted binary contains
+exactly one instance of each of the 77 mnemonic names. Its unit authority
+checks exact coverage and the golden listing; the process integration test
+launches the built CLI on that same `.bin` and compares stdout byte-for-byte.
+
+```text
+> cargo test -p z180-core disassembler -- --nocapture
+running 3 tests
+test disassembler::tests::disassembler_formats_immediates_indexes_relative_targets_and_unknowns ... ok
+test disassembler::tests::every_implemented_optable_entry_formats_without_placeholders ... ok
+test disassembler::tests::disassembly_is_total_and_lengths_tile_the_input ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.46s
+
+> cargo test -p z180-cli disassembler_golden_covers_every_mnemonic_once -- --nocapture
+running 1 test
+test dis::tests::disassembler_golden_covers_every_mnemonic_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+> cargo test -p z180-cli dis_command_matches_the_every_mnemonic_golden_file -- --nocapture
+running 1 test
+test dis_command_matches_the_every_mnemonic_golden_file ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+```
+
+The literal user-facing command also completed successfully and its listing
+matched the checked-in golden:
+
+```text
+> cargo run -p z180-cli -- dis crates/z180-cli/tests/fixtures/dis_every_mnemonic.bin --org 0x4000
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `target\debug\z180-cli.exe dis crates/z180-cli/tests/fixtures/dis_every_mnemonic.bin --org 0x4000`
+4000  88          ADC A,B
+...
+4082  A8          XOR B
+```
+
+Full regression and static authorities:
+
+```text
+> cargo test --workspace
+running 20 tests
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+running 81 tests
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo test -p z180-core --features state
+running 86 tests
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.05s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.16s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output.
+
 ## Phase 8 — Python binding, qns migration, reference differential
 
 ## Phase 9 — WASM and TypeScript

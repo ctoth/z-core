@@ -97,10 +97,6 @@ pub(crate) enum OperandKind {
 #[derive(Debug)]
 pub(crate) struct Opcode<B: HostBus> {
     pub(crate) mnemonic: &'static str,
-    #[allow(
-        dead_code,
-        reason = "consumed by the planned table-driven disassembler and docs generator"
-    )]
     pub(crate) operands: [OperandKind; 2],
     pub(crate) length: u8,
     pub(crate) cycles: Option<CycleCount>,
@@ -880,6 +876,72 @@ const fn build_index_cb_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] 
     table
 }
 
+const fn ed_mnemonic(opcode: u8) -> &'static str {
+    match opcode {
+        0x40 | 0x48 | 0x50 | 0x58 | 0x60 | 0x68 | 0x78 => "IN {g},(C)",
+        0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x79 => "OUT (C),{g}",
+        0x42 | 0x52 | 0x62 | 0x72 => "SBC HL,{rr}",
+        0x43 | 0x53 | 0x63 | 0x73 => "LD ({nn}),{rr}",
+        0x44 => "NEG",
+        0x45 => "RETN",
+        0x46 => "IM 0",
+        0x47 => "LD I,A",
+        0x4a | 0x5a | 0x6a | 0x7a => "ADC HL,{rr}",
+        0x4b | 0x5b | 0x6b | 0x7b => "LD {rr},({nn})",
+        0x4c | 0x5c | 0x6c | 0x7c => "MLT {rr}",
+        0x4d => "RETI",
+        0x4f => "LD R,A",
+        0x56 => "IM 1",
+        0x57 => "LD A,I",
+        0x5e => "IM 2",
+        0x5f => "LD A,R",
+        0x64 => "TST {n}",
+        0x67 => "RRD",
+        0x6f => "RLD",
+        0x74 => "TSTIO {n}",
+        0x76 => "SLP",
+        0x83 => "OTIM",
+        0x8b => "OTDM",
+        0x93 => "OTIMR",
+        0x9b => "OTDMR",
+        0xa0 => "LDI",
+        0xa1 => "CPI",
+        0xa2 => "INI",
+        0xa3 => "OUTI",
+        0xa8 => "LDD",
+        0xa9 => "CPD",
+        0xaa => "IND",
+        0xab => "OUTD",
+        0xb0 => "LDIR",
+        0xb1 => "CPIR",
+        0xb2 => "INIR",
+        0xb3 => "OTIR",
+        0xb8 => "LDDR",
+        0xb9 => "CPDR",
+        0xba => "INDR",
+        0xbb => "OTDR",
+        _ => "",
+    }
+}
+
+const fn ed_operands(opcode: u8) -> [OperandKind; 2] {
+    match opcode {
+        0x40 | 0x48 | 0x50 | 0x58 | 0x60 | 0x68 | 0x78 => {
+            [OperandKind::Reg8Destination, OperandKind::None]
+        }
+        0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x79 => {
+            [OperandKind::Reg8Source, OperandKind::None]
+        }
+        0x42 | 0x4a | 0x52 | 0x5a | 0x62 | 0x6a | 0x72 | 0x7a | 0x4c | 0x5c | 0x6c | 0x7c => {
+            [OperandKind::Reg16, OperandKind::None]
+        }
+        0x43 | 0x53 | 0x63 | 0x73 => [OperandKind::IndirectImmediate16, OperandKind::Reg16],
+        0x4b | 0x5b | 0x6b | 0x7b => [OperandKind::Reg16, OperandKind::IndirectImmediate16],
+        0x64 | 0x74 => [OperandKind::Immediate8, OperandKind::None],
+        _ => [OperandKind::None; 2],
+    }
+}
+
 const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
     let mut table = [Opcode::UNIMPLEMENTED; 256];
 
@@ -978,8 +1040,8 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
             2
         };
         table[opcode] = Opcode::implemented(
-            "{ed}",
-            [OperandKind::None; 2],
+            ed_mnemonic(opcode as u8),
+            ed_operands(opcode as u8),
             length,
             cycles,
             Z180::<B>::execute_ed,
