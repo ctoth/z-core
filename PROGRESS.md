@@ -2475,6 +2475,82 @@ Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
 
 The formatting check completed with no output.
 
+### Gate G7 — PASS (2026-07-21)
+
+P7.4 commit `fd30135` was pushed before the gate. GitHub Actions run
+`29874375518` passed formatting, default/state Clippy, and default/state tests
+on Ubuntu in 1m08s and Windows in 2m00s.
+
+The exact workspace gate produced:
+
+```text
+> cargo test --workspace
+running 25 tests
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 1 test
+test dis_command_matches_the_every_mnemonic_golden_file ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 1 test
+test run_command_executes_a_configured_rom_with_trace ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 81 tests
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+The separately named disassembler golden authority produced:
+
+```text
+> cargo test -p z180-cli disassembler_golden_covers_every_mnemonic_once -- --nocapture
+running 1 test
+test dis::tests::disassembler_golden_covers_every_mnemonic_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out
+```
+
+The deterministic save/load/resume demonstration saves a machine after two
+NOPs, creates an observably divergent machine, loads the snapshot, resumes the
+saved and uninterrupted paths for the same budget, and requires their final
+versioned state bytes to be identical. Its actual transcript was:
+
+```text
+> cargo test -p z180-core --features state save_load_resume_demonstration_transcript -- --nocapture
+running 1 test
+SAVE cycle=6 pc=0002 af=1234 state_bytes=65995
+DIVERGE cycle=3 pc=0001 af=A55A
+LOAD cycle=6 pc=0002 af=1234
+UNINTERRUPTED cycle=15 pc=0005 af=1234
+RESUMED cycle=15 pc=0005 af=1234
+MATCH state_bytes=true
+test tests::save_load_resume_demonstration_transcript ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out
+```
+
+Final gate-record regressions and static authorities:
+
+```text
+> cargo test -p z180-core --features state
+running 87 tests
+test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.28s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.99s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output.
+
+All three named G7 authorities are green. Phase 7 and Gate G7 are complete
+pending the gate-record commit, push, and CI; Phase 8 must not begin before
+that landing completes.
+
 ## Phase 8 — Python binding, qns migration, reference differential
 
 ## Phase 9 — WASM and TypeScript

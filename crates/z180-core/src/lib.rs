@@ -3290,6 +3290,8 @@ impl<B: HostBus> Z180<B> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec;
 
     use proptest::prelude::*;
@@ -3853,6 +3855,67 @@ mod tests {
             Err(StateError::Decode)
         );
         assert_eq!(cpu.save_state(), original, "length errors are also atomic");
+    }
+
+    #[cfg(feature = "state")]
+    #[test]
+    fn save_load_resume_demonstration_transcript() {
+        let mut uninterrupted = machine();
+        uninterrupted.write_internal_io(DCNTL, 0x00);
+        uninterrupted.set_reg(Reg::AF, 0x1234);
+        assert_eq!(uninterrupted.run(6), 6);
+        let saved_cycle = uninterrupted.cycle_count();
+        let saved_pc = uninterrupted.reg(Reg::PC);
+        let saved_af = uninterrupted.reg(Reg::AF);
+        let saved = uninterrupted.save_state();
+
+        let mut resumed = machine();
+        resumed.write_internal_io(DCNTL, 0x00);
+        resumed.set_reg(Reg::AF, 0xa55a);
+        assert_eq!(resumed.run(3), 3);
+        let divergent_cycle = resumed.cycle_count();
+        let divergent_pc = resumed.reg(Reg::PC);
+        let divergent_af = resumed.reg(Reg::AF);
+
+        resumed
+            .load_state(&saved)
+            .expect("the demonstration snapshot must load");
+        let loaded_cycle = resumed.cycle_count();
+        let loaded_pc = resumed.reg(Reg::PC);
+        let loaded_af = resumed.reg(Reg::AF);
+        assert_eq!(uninterrupted.run(9), 9);
+        assert_eq!(resumed.run(9), 9);
+        let uninterrupted_final = uninterrupted.save_state();
+        let resumed_final = resumed.save_state();
+
+        std::println!(
+            "SAVE cycle={saved_cycle} pc={saved_pc:04X} af={saved_af:04X} state_bytes={}",
+            saved.len()
+        );
+        std::println!(
+            "DIVERGE cycle={divergent_cycle} pc={divergent_pc:04X} af={divergent_af:04X}"
+        );
+        std::println!(
+            "LOAD cycle={} pc={:04X} af={:04X}",
+            loaded_cycle,
+            loaded_pc,
+            loaded_af
+        );
+        std::println!(
+            "UNINTERRUPTED cycle={} pc={:04X} af={:04X}",
+            uninterrupted.cycle_count(),
+            uninterrupted.reg(Reg::PC),
+            uninterrupted.reg(Reg::AF)
+        );
+        std::println!(
+            "RESUMED cycle={} pc={:04X} af={:04X}",
+            resumed.cycle_count(),
+            resumed.reg(Reg::PC),
+            resumed.reg(Reg::AF)
+        );
+        std::println!("MATCH state_bytes={}", uninterrupted_final == resumed_final);
+
+        assert_eq!(uninterrupted_final, resumed_final);
     }
 
     #[cfg(feature = "state")]
