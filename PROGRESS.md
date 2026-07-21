@@ -1959,6 +1959,50 @@ The formatting check completed with no output. P6.5 is complete; P6.6
 peripheral-to-interrupt integration and pairwise priority tests are the next
 unchecked Phase 6 task. Gate G6 remains open.
 
+### P6.6 — peripheral interrupt integration (2026-07-21)
+
+The seven internal peripheral sources are now covered as real adjacent
+priority pairs: PRT0 > PRT1 > DMA0 > DMA1 > CSI/O > ASCI0 > ASCI1. The
+integration authority creates both requests through each device's documented
+register/state owner, verifies both qualified request bits, acknowledges and
+checks the higher source's I:IL vector, clears that source through its real
+guest-visible protocol, then acknowledges and checks the lower vector.
+
+This closes the gap left by the earlier selector unit tests, which directly
+assigned `internal_irq_pending` to isolate vector dispatch. No production
+change was required: the implemented peripheral qualification and fixed
+priority selector compose correctly under all six adjacent competitions.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core peripheral_interrupts_vector_in_every_adjacent_priority_pair -- --nocapture
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 71 tests
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.88s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.6 is complete; P6.7's
+10-million-cycle save-state/event-stream determinism test is the next
+unchecked Phase 6 task. Gate G6 remains open.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential

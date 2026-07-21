@@ -4259,6 +4259,105 @@ mod tests {
     }
 
     #[test]
+    fn peripheral_interrupts_vector_in_every_adjacent_priority_pair() {
+        for (pair, name, higher_bit, lower_bit, higher_code, lower_code) in [
+            (0_u8, "PRT0 > PRT1", 0x01_u8, 0x02_u8, 0x04_u8, 0x06_u8),
+            (1, "PRT1 > DMA0", 0x02, 0x04, 0x06, 0x08),
+            (2, "DMA0 > DMA1", 0x04, 0x08, 0x08, 0x0a),
+            (3, "DMA1 > CSI/O", 0x08, 0x10, 0x0a, 0x0c),
+            (4, "CSI/O > ASCI0", 0x10, 0x20, 0x0c, 0x0e),
+            (5, "ASCI0 > ASCI1", 0x20, 0x40, 0x0e, 0x10),
+        ] {
+            let mut cpu = machine();
+            cpu.write_internal_io(DCNTL, 0x00);
+            cpu.write_internal_io(IL, 0xa0);
+            cpu.set_reg(Reg::IR, 0x2000);
+            cpu.set_reg(Reg::SP, 0x8000);
+
+            let higher_target = 0x4000_u16 | (u16::from(pair) << 8) | u16::from(higher_code);
+            let lower_target = 0x5000_u16 | (u16::from(pair) << 8) | u16::from(lower_code);
+            let higher_vector = 0x20a0_u32 | u32::from(higher_code);
+            let lower_vector = 0x20a0_u32 | u32::from(lower_code);
+            cpu.mem_poke(higher_vector, higher_target as u8);
+            cpu.mem_poke(higher_vector + 1, (higher_target >> 8) as u8);
+            cpu.mem_poke(lower_vector, lower_target as u8);
+            cpu.mem_poke(lower_vector + 1, (lower_target >> 8) as u8);
+
+            match pair {
+                0 => {
+                    cpu.write_internal_io(TMDR0L, 0x01);
+                    cpu.write_internal_io(TMDR0H, 0x00);
+                    cpu.write_internal_io(TMDR1L, 0x01);
+                    cpu.write_internal_io(TMDR1H, 0x00);
+                    cpu.write_internal_io(TCR, 0x33);
+                    cpu.finish_step(20);
+                }
+                1 => {
+                    cpu.write_internal_io(TMDR1L, 0x01);
+                    cpu.write_internal_io(TMDR1H, 0x00);
+                    cpu.write_internal_io(TCR, 0x22);
+                    cpu.finish_step(20);
+                    cpu.write_internal_io(DSTAT, 0x34);
+                }
+                2 => cpu.write_internal_io(DSTAT, 0x3c),
+                3 => {
+                    cpu.write_internal_io(DSTAT, 0x38);
+                    cpu.write_internal_io(TRD, 0xa5);
+                    cpu.write_internal_io(CNTR, 0x50);
+                    cpu.finish_step(160);
+                }
+                4 => {
+                    cpu.write_internal_io(TRD, 0xa5);
+                    cpu.write_internal_io(CNTR, 0x50);
+                    cpu.finish_step(160);
+                    cpu.write_internal_io(STAT0, 0x01);
+                }
+                5 => {
+                    cpu.write_internal_io(STAT0, 0x01);
+                    cpu.write_internal_io(STAT1, 0x01);
+                }
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                cpu.internal_irq_pending & (higher_bit | lower_bit),
+                higher_bit | lower_bit,
+                "{name} real requests"
+            );
+            cpu.set_iff1(true);
+            assert_eq!(cpu.step(), 18, "{name} higher acknowledge");
+            assert_eq!(cpu.reg(Reg::PC), higher_target, "{name} higher vector");
+
+            match pair {
+                0 => {
+                    assert_eq!(cpu.read_internal_io(TCR) & 0xc0, 0xc0);
+                    let _ = cpu.read_internal_io(TMDR0L);
+                }
+                1 => {
+                    assert_eq!(cpu.read_internal_io(TCR) & 0x80, 0x80);
+                    let _ = cpu.read_internal_io(TMDR1L);
+                }
+                2 => cpu.write_internal_io(DSTAT, 0x38),
+                3 => cpu.write_internal_io(DSTAT, 0x30),
+                4 => {
+                    let _ = cpu.read_internal_io(TRD);
+                }
+                5 => cpu.write_internal_io(STAT0, 0x00),
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                cpu.internal_irq_pending & (higher_bit | lower_bit),
+                lower_bit,
+                "{name} lower remains after real higher-source clear"
+            );
+            cpu.set_iff1(true);
+            assert_eq!(cpu.step(), 18, "{name} lower acknowledge");
+            assert_eq!(cpu.reg(Reg::PC), lower_target, "{name} lower vector");
+        }
+    }
+
+    #[test]
     fn interrupts_vector_dispatch_matrix_covers_every_source_gate_and_iff_state() {
         let sources = [
             (IrqSource::Nmi, None, 0x00, 0x00, None),

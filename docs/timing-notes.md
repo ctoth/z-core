@@ -54,6 +54,15 @@ INT0 Mode 0 therefore executes RST 38h, and INT0 Mode 2 uses `FFh` as the low
 byte of its `I:FFh` vector-table address. No runner-only or mode-specific
 vector setter exists.
 
+At each pre-instruction checkpoint, qualified peripheral requests are sampled
+in the fixed PRT0, PRT1, DMA0, DMA1, CSI/O, ASCI0, ASCI1 order. The device
+owners, rather than the interrupt controller, set and clear those level
+requests from their documented flags and enable bits. A selected request
+therefore remains eligible after acknowledge until guest-visible device state
+clears it. Pairwise integration tests drive and clear every adjacent pair
+through those real owners before each 18-cycle internal acknowledge; no test
+or runtime path injects a different arbitration timing rule.
+
 ### Programmable reload timers
 
 PRT0 and PRT1 share a system-clock-divided-by-20 phase accumulator. At every
