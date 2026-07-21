@@ -1,0 +1,2 @@
+crates/z180-cli/tests/fixtures/*.bin binary
+crates/z180-cli/tests/fixtures/*.golden text eol=lf

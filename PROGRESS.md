@@ -2385,6 +2385,14 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 
 The formatting check completed with no output.
 
+The first pushed P7.3 CI run (`29873100117`) passed every Ubuntu step but its
+Windows default-test step found that Git had checked the text golden out with
+CRLF while the deterministic renderer emits LF. The instruction listing was
+otherwise byte-identical. Repository `.gitattributes` now marks the crafted
+`.bin` as binary and pins `.golden` fixtures to `text eol=lf`; the exact golden
+and process tests pass locally with those attributes. Corrected CI must be
+green before P7.4 begins.
+
 ## Phase 8 — Python binding, qns migration, reference differential
 
 ## Phase 9 — WASM and TypeScript
