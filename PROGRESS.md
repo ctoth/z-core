@@ -830,6 +830,104 @@ Doc-tests z180_core: 0 passed; 0 failed
 The format check completed successfully with no output. Phase 3 task 4 is the
 next unchecked plan item.
 
+### P3.4 — standard SST conflict with defined Z180 ED opcodes — RESOLVED (2026-07-21)
+
+Direct UM0050 Table 50 authority and the first focused ED execution run prove
+that the current Gate G3 corpus rule is internally inconsistent:
+
+- UM0050 defines ED4C/5C/6C/7C as MLT, ED64 as TST immediate, ED74 as TSTIO,
+  and ED76 as SLP.
+- The standard `tests/sst/v1` files at those bytes encode undocumented Z80
+  aliases instead: NEG for the MLT/TST/TSTIO bytes and IM1 for ED76.
+- Appendix A currently permits SST exclusion if and only if an opcode is
+  undefined on Z180, so these defined-but-semantically-different files cannot
+  be excluded under the controlling policy.
+- Gate G3 simultaneously requires every documented v1 file to PASS and the
+  Z180 additions to use their UM0050 semantics. No implementation can satisfy
+  both expectations for the same opcode bytes.
+
+The focused command exited nonzero with
+`SUMMARY pass=14819 fail=3181 unimplemented=0 excluded=0`. ED4C demonstrates
+the semantic conflict directly: the corpus expects NEG accumulator results
+while the UM-defined implementation multiplies BC. ED76 expects IM1 while the
+UM-defined implementation enters sleep. Separate ED42/ED4A flag mismatches
+also remain to be corrected within P3.4 after the authority conflict is
+resolved.
+
+Q authorized the narrow consistent corpus-policy correction on 2026-07-21.
+Appendix A and Gate G3 now exclude standard v1 files whose undocumented Z80
+aliases occupy bytes repurposed as defined Z180 operations: ED4C/5C/6C/7C,
+ED64, ED74, and ED76. Their Z180 semantics remain authoritative through the
+reference-generated `tests/z180-sst` instruction cases required by P3.7. This
+policy change does not alter opcode execution or rewrite either corpus.
+
+### P3.4 — standard RETI IFF semantics conflict with Z180 — RESOLVED (2026-07-21)
+
+After applying the authorized seven-file alias exclusion and fixing the
+independent 16-bit ADC/SBC zero-flag defect, the exact focused ED run produced
+`SUMMARY pass=14489 fail=511 unimplemented=0 excluded=3`. All remaining
+failures are the standard `ed 4d` file comparing IFF1 after RETI.
+
+Direct inspection of the UM0050 Table 45 page image, printed p. 230, states
+that RETI pops PC without changing IEF1 or IEF2. RETN separately pops PC and
+copies IEF2 into IEF1. The current core implements that exact distinction.
+The standard Z80 corpus expects RETI to copy IFF2 into IFF1, so changing core
+execution to pass it would violate the manual.
+
+The subsequent block was invalid: Q's existing authorization covered standard
+v1 files whose tested meaning conflicts with the defined Z180 meaning; it was
+not limited to renamed undocumented aliases. Appendix A and Gate G3 now state
+that authorized rule without the invented narrowing. Standard `ed 4d` is
+excluded, the verification log names its exact contradiction, and a pinned
+core regression proves that RETI preserves both IEFs while RETN alone restores
+IEF1 from IEF2. The UM0050 behavior remains unchanged.
+
+### P3.4 — ED page (2026-07-21)
+
+The ED metadata table now contains exactly the 92 populated UM0050 Table 50
+cells. Decode performs the second M1 fetch and dispatches all documented
+standard families plus IN0/OUT0, TST/TSTIO, MLT, OTIM/OTDM, and SLP. Blank
+cells remain without handlers for P3.5 TRAP. SLP owns real private sleep state
+with a public read-only accessor for the P3.7 runner.
+
+Direct manual verification corrected three execution details found during
+focused SST work: 16-bit ADC/SBC derives Z from the complete result; RETI
+leaves IEF1/IEF2 unchanged while RETN restores IEF1 from IEF2; and block input
+uses initial BC while block output uses decremented B with C. A pinned core
+regression distinguishes RETI from RETN. The authorized Appendix A policy
+excludes eight standard ED files whose transitions contradict defined Z180
+semantics: 4C, 4D, 5C, 64, 6C, 74, 76, and 7C.
+
+The focused non-P3.6 ED selection passed every applicable standard case:
+
+```text
+SUMMARY pass=38000 fail=0 unimplemented=0 excluded=23
+```
+
+The rebuilt complete-corpus diagnostic now reports:
+
+```text
+SUMMARY pass=689986 fail=7014 unimplemented=0 excluded=907
+```
+
+Only ED A2/A3/AA/AB/B2/B3/BA/BB fail, and every reported first difference is
+`f`. Cases whose flags already match pass completely; direct Table 46 and raw
+A2/A3 case audits establish the shared branch's input/output port ordering.
+P3.6 explicitly owns the remaining block-operation flag subtleties, so P3.4
+does not alter those flags ahead of their numbered task.
+
+Workspace tests passed 13 CLI tests, 18 core tests, and doc tests. The final
+warnings-denied Clippy and format check passed:
+
+```text
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.66s
+
+> cargo fmt --check
+```
+
+Phase 3 task 5 is the next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window

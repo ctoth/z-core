@@ -56,13 +56,16 @@ pub(crate) fn opcode_bytes(stem: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-pub(crate) fn undefined_reason(opcodes: &[u8]) -> Option<&'static str> {
+pub(crate) fn exclusion_reason(opcodes: &[u8]) -> Option<&'static str> {
     match opcodes {
         [_main] => None,
         [0xcb, opcode] if (0x30..=0x37).contains(opcode) => {
             Some("CB SLL is undefined on Z80180 (UM0050 Table 49)")
         }
         [0xcb, _opcode] => None,
+        [0xed, 0x4c | 0x4d | 0x5c | 0x6c | 0x7c | 0x64 | 0x74 | 0x76] => {
+            Some("standard Z80 transition contradicts the defined Z80180 instruction")
+        }
         [0xed, opcode] if !defined_ed(*opcode) => {
             Some("blank ED-map cell is undefined on Z80180 (UM0050 Table 50)")
         }
@@ -260,17 +263,24 @@ mod tests {
 
     #[test]
     fn appendix_a_policy_excludes_known_undefined_families() {
-        assert!(undefined_reason(&[0xcb, 0x30]).is_some());
-        assert!(undefined_reason(&[0xcb, 0x2f]).is_none());
-        assert!(undefined_reason(&[0xed, 0x02]).is_some());
-        assert!(undefined_reason(&[0xed, 0x30]).is_none());
-        assert!(undefined_reason(&[0xed, 0x31]).is_some());
-        assert!(undefined_reason(&[0xed, 0x4c]).is_none());
-        assert!(undefined_reason(&[0xdd, 0x24]).is_some());
-        assert!(undefined_reason(&[0xdd, 0x21]).is_none());
-        assert!(undefined_reason(&[0xfd, 0xeb]).is_some());
-        assert!(undefined_reason(&[0xdd, 0xcb, 0x46]).is_none());
-        assert!(undefined_reason(&[0xdd, 0xcb, 0x40]).is_some());
-        assert!(undefined_reason(&[0xfd, 0xcb, 0x36]).is_some());
+        assert!(exclusion_reason(&[0xcb, 0x30]).is_some());
+        assert!(exclusion_reason(&[0xcb, 0x2f]).is_none());
+        assert!(exclusion_reason(&[0xed, 0x02]).is_some());
+        assert!(exclusion_reason(&[0xed, 0x30]).is_none());
+        assert!(exclusion_reason(&[0xed, 0x31]).is_some());
+        assert!(exclusion_reason(&[0xdd, 0x24]).is_some());
+        assert!(exclusion_reason(&[0xdd, 0x21]).is_none());
+        assert!(exclusion_reason(&[0xfd, 0xeb]).is_some());
+        assert!(exclusion_reason(&[0xdd, 0xcb, 0x46]).is_none());
+        assert!(exclusion_reason(&[0xdd, 0xcb, 0x40]).is_some());
+        assert!(exclusion_reason(&[0xfd, 0xcb, 0x36]).is_some());
+    }
+
+    #[test]
+    fn appendix_a_policy_excludes_incompatible_ed_transitions() {
+        for opcode in [0x4c, 0x4d, 0x5c, 0x6c, 0x7c, 0x64, 0x74, 0x76] {
+            assert!(exclusion_reason(&[0xed, opcode]).is_some());
+        }
+        assert!(exclusion_reason(&[0xed, 0x44]).is_none());
     }
 }

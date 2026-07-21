@@ -11,7 +11,7 @@ use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use z180_core::{HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180};
 
-use policy::{OnlyFilter, opcode_bytes, undefined_reason};
+use policy::{OnlyFilter, exclusion_reason, opcode_bytes};
 
 const FLAG_COMPARE_MASK: u8 = !0x28;
 
@@ -267,7 +267,7 @@ pub(crate) fn run(args: SstArgs) -> Result<()> {
         }
 
         let opcodes = opcode_bytes(&stem)?;
-        if let Some(reason) = undefined_reason(&opcodes) {
+        if let Some(reason) = exclusion_reason(&opcodes) {
             report.excluded.push(ExcludedFile {
                 file: stem,
                 reason: reason.to_owned(),

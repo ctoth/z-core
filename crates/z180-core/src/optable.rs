@@ -647,6 +647,77 @@ const fn build_index_cb_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] 
     table
 }
 
+const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
+    let mut table = [Opcode::UNIMPLEMENTED; 256];
+
+    let in0 = [0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38];
+    let mut index = 0_usize;
+    while index < in0.len() {
+        table[in0[index]] = Opcode::implemented(
+            "IN0 {g},({n})",
+            [OperandKind::Reg8Destination, OperandKind::PortImmediate],
+            3,
+            Z180::<B>::execute_ed,
+        );
+        index += 1;
+    }
+
+    let out0 = [0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x39];
+    index = 0;
+    while index < out0.len() {
+        table[out0[index]] = Opcode::implemented(
+            "OUT0 ({n}),{g}",
+            [OperandKind::PortImmediate, OperandKind::Reg8Source],
+            3,
+            Z180::<B>::execute_ed,
+        );
+        index += 1;
+    }
+
+    let tst = [0x04, 0x0c, 0x14, 0x1c, 0x24, 0x2c, 0x34, 0x3c];
+    index = 0;
+    while index < tst.len() {
+        table[tst[index]] = Opcode::implemented(
+            "TST {g}",
+            [OperandKind::Reg8Source, OperandKind::None],
+            2,
+            Z180::<B>::execute_ed,
+        );
+        index += 1;
+    }
+
+    let standard = [
+        0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4f,
+        0x50, 0x51, 0x52, 0x53, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5e, 0x5f, 0x60, 0x61,
+        0x62, 0x63, 0x64, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6f, 0x72, 0x73, 0x74, 0x76, 0x78,
+        0x79, 0x7a, 0x7b, 0x7c, 0x83, 0x8b, 0x93, 0x9b, 0xa0, 0xa1, 0xa2, 0xa3, 0xa8, 0xa9, 0xaa,
+        0xab, 0xb0, 0xb1, 0xb2, 0xb3, 0xb8, 0xb9, 0xba, 0xbb,
+    ];
+    index = 0;
+    while index < standard.len() {
+        let opcode = standard[index];
+        let length = if matches!(
+            opcode,
+            0x43 | 0x4b | 0x53 | 0x5b | 0x63 | 0x6b | 0x73 | 0x7b
+        ) {
+            4
+        } else if matches!(opcode, 0x64 | 0x74) {
+            3
+        } else {
+            2
+        };
+        table[opcode] = Opcode::implemented(
+            "{ed}",
+            [OperandKind::None; 2],
+            length,
+            Z180::<B>::execute_ed,
+        );
+        index += 1;
+    }
+
+    table
+}
+
 impl<B: HostBus> Z180<B> {
     pub(crate) const MAIN_OPCODES: [Opcode<B>; 256] = build_main_table::<B>();
     pub(crate) const CB_OPCODES: [Opcode<B>; 256] = build_cb_table::<B>();
@@ -654,6 +725,7 @@ impl<B: HostBus> Z180<B> {
     pub(crate) const FD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, true>();
     pub(crate) const DDCB_OPCODES: [Opcode<B>; 256] = build_index_cb_table::<B, false>();
     pub(crate) const FDCB_OPCODES: [Opcode<B>; 256] = build_index_cb_table::<B, true>();
+    pub(crate) const ED_OPCODES: [Opcode<B>; 256] = build_ed_table::<B>();
 }
 
 #[cfg(test)]
@@ -780,5 +852,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn ed_table_contains_exactly_the_populated_table_50_cells() {
+        let table = &Z180::<NullBus>::ED_OPCODES;
+        assert_eq!(
+            table.iter().filter(|entry| entry.handler.is_some()).count(),
+            92
+        );
+        assert!(table[0x00].handler.is_some());
+        assert!(table[0x4c].handler.is_some());
+        assert!(table[0xbb].handler.is_some());
+        assert!(table[0x02].handler.is_none());
+        assert!(table[0x4e].handler.is_none());
+        assert!(table[0xff].handler.is_none());
     }
 }

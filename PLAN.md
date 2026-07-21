@@ -689,9 +689,12 @@ Tasks:
    UNIMPLEMENTED.
 
 **GATE G3:**
-- `z180-cli sst --dir tests/sst/v1` → all documented files PASS, zero FAIL,
-  zero UNIMPLEMENTED (excluded undocumented files listed by name in the
-  report, count matching Appendix A policy).
+- `z180-cli sst --dir tests/sst/v1` → every file whose tested Z80 meaning is
+  also defined with that meaning on Z180 PASS, zero FAIL, zero UNIMPLEMENTED
+  (excluded files listed by name in the report, count matching Appendix A
+  policy). This excludes both undefined-on-Z180 opcodes and standard-suite
+  files whose expected Z80 transition contradicts the directly verified
+  UM0050 transition for that defined Z180 encoding.
 - `z180-cli sst --dir tests/z180-sst` → 100% PASS on reference-generated
   Z180-op and TRAP
   suites (MMU suite may remain UNIMPLEMENTED until Phase 5; the report must
@@ -910,10 +913,18 @@ instruction set chapter before encoding):
   and cover the verified behavior in the reference-generated z180-sst cases).
 - DDCB/FDCB: only the documented displacement forms; others per UM.
 
-SST exclusion rule (Phase 1 runner): exclude a test file if and only if its
-opcode is undefined-on-Z180 per this appendix. The runner prints the excluded
-list with the reason; the count must be stable across runs and recorded in
-PROGRESS.md at each gate.
+SST exclusion rule (Phase 1 runner): exclude a test file if and only if either
+(a) its opcode is undefined-on-Z180 per this appendix, or (b) the standard Z80
+suite's expected transition contradicts the directly verified UM0050
+transition for that defined Z180 encoding. Each rule (b) exclusion must name
+the exact contradiction in `docs/verification-log.md` and have a pinned Z180
+regression; its Z180 semantics are covered by the reference-generated
+`tests/z180-sst` instruction cases and never by the incompatible
+standard-suite final states. Verified rule (b) exclusions are ED 4C/5C/6C/7C
+(MLT), ED 64 (TST immediate), ED 74 (TSTIO immediate), ED 76 (SLP), and ED 4D
+(RETI leaves IEF1/IEF2 unchanged). The runner prints the excluded list with
+the reason; the count must be stable across runs and recorded in PROGRESS.md
+at each gate.
 
 ## Appendix B — Test asset acquisition
 
