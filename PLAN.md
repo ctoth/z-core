@@ -779,7 +779,9 @@ descriptions; one task per peripheral, in this order):
    cost assertions; DMA1 mem↔I/O with a scripted HostBus; NMI-stop test).
 6. Peripheral↔interrupt integration: each source raises its vector with
    correct priority ordering (pairwise priority tests).
-7. Determinism test: run a scripted machine (timers + ASCI traffic + DMA)
+7. `state` feature: save_state/load_state with version byte; round-trip
+   property test (save → load → run N cycles ≡ run N cycles from original).
+8. Determinism test: run a scripted machine (timers + ASCI traffic + DMA)
    for 10M cycles twice; assert identical `save_state()` bytes and event
    streams.
 
@@ -794,12 +796,10 @@ Tasks:
 1. Event ring + watches + pc-watch + io/irq trace (2.2 API) with tests
    (watch fires exactly on watched range; ring overflow sets events_lost).
 2. Instruction trace ring.
-3. `state` feature: save_state/load_state with version byte; round-trip
-   property test (save → load → run N cycles ≡ run N cycles from original).
-4. Disassembler in z180-cli (`z180-cli dis file.bin --org 0x0000`), driven
+3. Disassembler in z180-cli (`z180-cli dis file.bin --org 0x0000`), driven
    from optable metadata; golden-file test over a crafted binary covering
    every mnemonic once.
-5. `z180-cli run rom.bin --cycles N --trace --config machine.toml`:
+4. `z180-cli run rom.bin --cycles N --trace --config machine.toml`:
    config file mapping (regions, variant, clock) so Q can run bare ROMs.
 
 **GATE G7:** `cargo test --workspace` green; disassembler golden test

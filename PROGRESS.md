@@ -1999,9 +1999,82 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 > cargo fmt --all -- --check
 ```
 
-The formatting check completed with no output. P6.6 is complete; P6.7's
-10-million-cycle save-state/event-stream determinism test is the next
-unchecked Phase 6 task. Gate G6 remains open.
+The formatting check completed with no output. P6.6 is complete. The next
+task originally consumed `save_state()` before the plan created that method;
+the existing state-feature task has therefore been moved ahead of its
+determinism consumer without changing either task's scope. P6.7 state support
+is next, followed by P6.8's 10-million-cycle determinism test. Gate G6 remains
+open.
+
+### P6.7 — versioned save state (2026-07-21)
+
+The optional, default-off `state` feature now provides the plan's exact
+`save_state()` and `load_state()` surface using a raw version byte followed by
+a postcard payload. The payload includes every core-owned state field:
+registers, memory mapping and contents, variant, internal registers, elapsed
+and in-progress timing, CPU control and pin latches, DMA requests, all
+peripheral pipelines and queues, and pending events. The generic HostBus is
+host-owned and remains outside the snapshot; the derived MMU page cache is
+recomputed after an atomic successful load.
+
+The error authority covers missing, unsupported, truncated, and structurally
+invalid payloads without mutation. The 32-case property authority snapshots
+machines with active PRT, ASCI transmit/receive, CSI/O, DMA, memory, and
+register state, restores into a fresh machine, then proves equal consumed
+cycles, serial output, events, and final state after both machines run the
+same generated cycle budget. Repeated state serialization is byte-identical.
+The default no-feature dependency tree still contains only `z180-core`.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core --features state save_state_ -- --nocapture
+running 2 tests
+test tests::save_state_version_and_decode_errors_are_atomic ... ok
+test tests::save_state_round_trip_resume_matches_uninterrupted_execution ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 71 filtered out; finished in 0.35s
+
+> cargo test -p z180-core --features state
+running 73 tests
+test result: ok. 73 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 71 tests
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.41s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+    Checking windows-sys v0.61.2
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking tempfile v3.27.0
+    Checking rusty-fork v0.3.1
+    Checking proptest v1.11.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.24s
+
+> cargo tree -p z180-core --no-default-features --edges normal
+z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.7 is complete pending its
+task commit, push, and CI. P6.8's exact 10-million-cycle determinism authority
+is next only after P6.7 lands. Gate G6 remains open.
 
 ## Phase 7 — Debug, trace, save-state, disassembler
 

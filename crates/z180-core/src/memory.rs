@@ -6,6 +6,7 @@ use crate::HostBus;
 
 pub(crate) const PAGE_SIZE: u32 = 4096;
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Variant {
     Z80180,
@@ -92,6 +93,7 @@ impl fmt::Display for ConfigError {
 
 impl core::error::Error for ConfigError {}
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Page {
     Unmapped,
@@ -100,6 +102,8 @@ enum Page {
     External,
 }
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone)]
 pub(crate) struct Memory {
     pages: Vec<Page>,
     ram: Vec<u8>,

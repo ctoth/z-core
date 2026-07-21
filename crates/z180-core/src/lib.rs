@@ -65,6 +65,7 @@ pub enum IrqSource {
     Asci1,
 }
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Trap {
@@ -74,6 +75,33 @@ pub enum Event {
         len: u8,
     },
 }
+
+#[cfg(feature = "state")]
+const STATE_VERSION: u8 = 1;
+
+#[cfg(feature = "state")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StateError {
+    MissingVersion,
+    UnsupportedVersion(u8),
+    Decode,
+}
+
+#[cfg(feature = "state")]
+impl core::fmt::Display for StateError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MissingVersion => write!(formatter, "save state has no version byte"),
+            Self::UnsupportedVersion(version) => {
+                write!(formatter, "save state version {version} is unsupported")
+            }
+            Self::Decode => write!(formatter, "save state payload is invalid"),
+        }
+    }
+}
+
+#[cfg(feature = "state")]
+impl core::error::Error for StateError {}
 
 pub struct Z180<B: HostBus> {
     registers: Registers,
@@ -101,6 +129,56 @@ pub struct Z180<B: HostBus> {
     dreq_edge_pending: [bool; 2],
     // Phase 6 peripherals set these bits only after their own enable and
     // request conditions are satisfied; this controller owns priority only.
+    internal_irq_pending: u8,
+    frc_cycle_remainder: u32,
+    prt_cycle_remainder: u32,
+    prt_high_latch: [u8; 2],
+    prt_high_latch_valid: [bool; 2],
+    prt_clear_armed: u8,
+    asci_cts: [bool; 2],
+    asci_dcd: [bool; 2],
+    asci_dcd_latched: bool,
+    asci_dcd_irq_pending: bool,
+    asci_tdr_full: [bool; 2],
+    asci_tx_shift: [Option<u8>; 2],
+    asci_tx_cycles: [u64; 2],
+    asci_tx_clocked: [bool; 2],
+    asci_tx_output: [VecDeque<u8>; 2],
+    asci_rx_shift: [Option<u8>; 2],
+    asci_rx_cycles: [u64; 2],
+    asci_rx_clocked: [bool; 2],
+    asci_rx_fifo: [VecDeque<u8>; 2],
+    csio_rx_shift: Option<u8>,
+    csio_cycles: u64,
+    csio_clocked: bool,
+    csio_tx_output: VecDeque<u8>,
+    events: Vec<Event>,
+}
+
+#[cfg(feature = "state")]
+#[derive(serde::Deserialize, serde::Serialize)]
+struct SavedState {
+    registers: Registers,
+    memory: Memory,
+    instruction_pc: u16,
+    cycle_count: u64,
+    variant: Variant,
+    io_regs: Vec<u8>,
+    timing_branch_taken: bool,
+    timing_repeat_iterations: u16,
+    timing_memory_waits: u32,
+    timing_io_waits: u32,
+    halted: bool,
+    sleeping: bool,
+    iff1: bool,
+    iff2: bool,
+    ei_shadow: bool,
+    interrupt_mode: u8,
+    irq_lines: [bool; 3],
+    nmi_level: bool,
+    nmi_pending: bool,
+    dreq_level: [bool; 2],
+    dreq_edge_pending: [bool; 2],
     internal_irq_pending: u8,
     frc_cycle_remainder: u32,
     prt_cycle_remainder: u32,
@@ -503,6 +581,128 @@ impl<B: HostBus> Z180<B> {
 
     pub fn drain_events(&mut self) -> Vec<Event> {
         core::mem::take(&mut self.events)
+    }
+
+    #[cfg(feature = "state")]
+    pub fn save_state(&self) -> Vec<u8> {
+        let state = SavedState {
+            registers: self.registers,
+            memory: self.memory.clone(),
+            instruction_pc: self.instruction_pc,
+            cycle_count: self.cycle_count,
+            variant: self.variant,
+            io_regs: self.io_regs.to_vec(),
+            timing_branch_taken: self.timing_branch_taken,
+            timing_repeat_iterations: self.timing_repeat_iterations,
+            timing_memory_waits: self.timing_memory_waits,
+            timing_io_waits: self.timing_io_waits,
+            halted: self.halted,
+            sleeping: self.sleeping,
+            iff1: self.iff1,
+            iff2: self.iff2,
+            ei_shadow: self.ei_shadow,
+            interrupt_mode: self.interrupt_mode,
+            irq_lines: self.irq_lines,
+            nmi_level: self.nmi_level,
+            nmi_pending: self.nmi_pending,
+            dreq_level: self.dreq_level,
+            dreq_edge_pending: self.dreq_edge_pending,
+            internal_irq_pending: self.internal_irq_pending,
+            frc_cycle_remainder: self.frc_cycle_remainder,
+            prt_cycle_remainder: self.prt_cycle_remainder,
+            prt_high_latch: self.prt_high_latch,
+            prt_high_latch_valid: self.prt_high_latch_valid,
+            prt_clear_armed: self.prt_clear_armed,
+            asci_cts: self.asci_cts,
+            asci_dcd: self.asci_dcd,
+            asci_dcd_latched: self.asci_dcd_latched,
+            asci_dcd_irq_pending: self.asci_dcd_irq_pending,
+            asci_tdr_full: self.asci_tdr_full,
+            asci_tx_shift: self.asci_tx_shift,
+            asci_tx_cycles: self.asci_tx_cycles,
+            asci_tx_clocked: self.asci_tx_clocked,
+            asci_tx_output: self.asci_tx_output.clone(),
+            asci_rx_shift: self.asci_rx_shift,
+            asci_rx_cycles: self.asci_rx_cycles,
+            asci_rx_clocked: self.asci_rx_clocked,
+            asci_rx_fifo: self.asci_rx_fifo.clone(),
+            csio_rx_shift: self.csio_rx_shift,
+            csio_cycles: self.csio_cycles,
+            csio_clocked: self.csio_clocked,
+            csio_tx_output: self.csio_tx_output.clone(),
+            events: self.events.clone(),
+        };
+
+        let mut bytes = Vec::new();
+        bytes.push(STATE_VERSION);
+        if let Ok(payload) = postcard::to_allocvec(&state) {
+            bytes.extend_from_slice(&payload);
+        }
+        bytes
+    }
+
+    #[cfg(feature = "state")]
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let Some((&version, payload)) = data.split_first() else {
+            return Err(StateError::MissingVersion);
+        };
+        if version != STATE_VERSION {
+            return Err(StateError::UnsupportedVersion(version));
+        }
+        let state: SavedState = postcard::from_bytes(payload).map_err(|_| StateError::Decode)?;
+        let io_regs: [u8; IO_REGISTER_COUNT] = state
+            .io_regs
+            .as_slice()
+            .try_into()
+            .map_err(|_| StateError::Decode)?;
+
+        self.registers = state.registers;
+        self.memory = state.memory;
+        self.instruction_pc = state.instruction_pc;
+        self.cycle_count = state.cycle_count;
+        self.variant = state.variant;
+        self.io_regs = io_regs;
+        self.recompute_mmu_pages();
+        self.timing_branch_taken = state.timing_branch_taken;
+        self.timing_repeat_iterations = state.timing_repeat_iterations;
+        self.timing_memory_waits = state.timing_memory_waits;
+        self.timing_io_waits = state.timing_io_waits;
+        self.halted = state.halted;
+        self.sleeping = state.sleeping;
+        self.iff1 = state.iff1;
+        self.iff2 = state.iff2;
+        self.ei_shadow = state.ei_shadow;
+        self.interrupt_mode = state.interrupt_mode;
+        self.irq_lines = state.irq_lines;
+        self.nmi_level = state.nmi_level;
+        self.nmi_pending = state.nmi_pending;
+        self.dreq_level = state.dreq_level;
+        self.dreq_edge_pending = state.dreq_edge_pending;
+        self.internal_irq_pending = state.internal_irq_pending;
+        self.frc_cycle_remainder = state.frc_cycle_remainder;
+        self.prt_cycle_remainder = state.prt_cycle_remainder;
+        self.prt_high_latch = state.prt_high_latch;
+        self.prt_high_latch_valid = state.prt_high_latch_valid;
+        self.prt_clear_armed = state.prt_clear_armed;
+        self.asci_cts = state.asci_cts;
+        self.asci_dcd = state.asci_dcd;
+        self.asci_dcd_latched = state.asci_dcd_latched;
+        self.asci_dcd_irq_pending = state.asci_dcd_irq_pending;
+        self.asci_tdr_full = state.asci_tdr_full;
+        self.asci_tx_shift = state.asci_tx_shift;
+        self.asci_tx_cycles = state.asci_tx_cycles;
+        self.asci_tx_clocked = state.asci_tx_clocked;
+        self.asci_tx_output = state.asci_tx_output;
+        self.asci_rx_shift = state.asci_rx_shift;
+        self.asci_rx_cycles = state.asci_rx_cycles;
+        self.asci_rx_clocked = state.asci_rx_clocked;
+        self.asci_rx_fifo = state.asci_rx_fifo;
+        self.csio_rx_shift = state.csio_rx_shift;
+        self.csio_cycles = state.csio_cycles;
+        self.csio_clocked = state.csio_clocked;
+        self.csio_tx_output = state.csio_tx_output;
+        self.events = state.events;
+        Ok(())
     }
 
     pub fn iff1(&self) -> bool {
@@ -3184,6 +3384,104 @@ mod tests {
             ],
             preserved
         );
+    }
+
+    #[cfg(feature = "state")]
+    #[test]
+    fn save_state_version_and_decode_errors_are_atomic() {
+        let mut cpu = machine();
+        cpu.set_reg(Reg::AF, 0xa55a);
+        cpu.mem_poke(0x1234, 0x66);
+        let original = cpu.save_state();
+        assert_eq!(original.first(), Some(&STATE_VERSION));
+        assert_eq!(cpu.save_state(), original, "repeated saves are identical");
+
+        assert_eq!(cpu.load_state(&[]), Err(StateError::MissingVersion));
+        assert_eq!(
+            cpu.load_state(&[STATE_VERSION.wrapping_add(1)]),
+            Err(StateError::UnsupportedVersion(
+                STATE_VERSION.wrapping_add(1)
+            ))
+        );
+        assert_eq!(cpu.load_state(&[STATE_VERSION]), Err(StateError::Decode));
+        assert_eq!(
+            cpu.save_state(),
+            original,
+            "decode errors do not mutate state"
+        );
+
+        let mut decoded: SavedState = postcard::from_bytes(&original[1..])
+            .expect("freshly saved payload must decode in its own test");
+        decoded.io_regs.pop();
+        let payload = postcard::to_allocvec(&decoded)
+            .expect("the deliberately short register file must serialize");
+        let mut wrong_register_count = vec![STATE_VERSION];
+        wrong_register_count.extend_from_slice(&payload);
+        assert_eq!(
+            cpu.load_state(&wrong_register_count),
+            Err(StateError::Decode)
+        );
+        assert_eq!(cpu.save_state(), original, "length errors are also atomic");
+    }
+
+    #[cfg(feature = "state")]
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn save_state_round_trip_resume_matches_uninterrupted_execution(
+            pre_steps in 0_u8..12,
+            run_budget in 0_u32..4_000,
+            dma_count in 1_u8..5,
+            timer_count in 1_u8..8,
+            tx_byte in any::<u8>(),
+            rx_byte in any::<u8>(),
+        ) {
+            let mut original = machine();
+            original.write_internal_io(DCNTL, 0x00);
+            original.set_reg(Reg::AF, u16::from(tx_byte) << 8 | u16::from(rx_byte));
+            original.set_reg(Reg::SP, 0x8000);
+
+            original.write_internal_io(TMDR0L, timer_count);
+            original.write_internal_io(TMDR0H, 0x00);
+            original.write_internal_io(RLDR0L, timer_count.wrapping_add(1));
+            original.write_internal_io(RLDR0H, 0x00);
+            original.write_internal_io(TCR, 0x01);
+
+            original.write_internal_io(CNTLB0, 0x00);
+            original.write_internal_io(CNTLA0, 0x64);
+            original.write_internal_io(TDR0, tx_byte);
+            prop_assert!(original.asci_rx_push(0, rx_byte));
+
+            original.write_internal_io(TRD, tx_byte ^ rx_byte);
+            original.write_internal_io(CNTR, 0x10);
+
+            for offset in 0..dma_count {
+                original.mem_poke(0x0100 + u32::from(offset), tx_byte.wrapping_add(offset));
+            }
+            original.write_internal_io(SAR0L, 0x00);
+            original.write_internal_io(SAR0H, 0x01);
+            original.write_internal_io(DAR0L, 0x00);
+            original.write_internal_io(DAR0H, 0x02);
+            original.write_internal_io(BCR0L, dma_count);
+            original.write_internal_io(DMODE, 0x00);
+            original.write_internal_io(DSTAT, 0x60);
+
+            for _ in 0..pre_steps {
+                prop_assert_ne!(original.step(), 0);
+            }
+
+            let saved = original.save_state();
+            let mut resumed = machine();
+            prop_assert_eq!(resumed.load_state(&saved), Ok(()));
+            prop_assert_eq!(resumed.save_state(), saved);
+
+            prop_assert_eq!(original.run(run_budget), resumed.run(run_budget));
+            prop_assert_eq!(original.asci_tx_pop(0), resumed.asci_tx_pop(0));
+            prop_assert_eq!(original.csio_tx_pop(), resumed.csio_tx_pop());
+            prop_assert_eq!(original.drain_events(), resumed.drain_events());
+            prop_assert_eq!(original.save_state(), resumed.save_state());
+        }
     }
 
     #[test]

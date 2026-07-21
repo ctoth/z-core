@@ -131,6 +131,23 @@ baud rate. SS=7 selects an external CKS input. The fixed Phase 1 API has no
 CKS edge input, so an external-clock transfer remains in its shift stage and
 does not advance from system phi cycles. No external clock is inferred.
 
+### Save-state boundary
+
+With the optional `state` feature, `save_state()` serializes a version byte
+followed by a postcard payload containing all core-owned emulation state. That
+includes registers, mapped memory topology and contents, cycle and
+instruction-boundary state, pin and request latches, peripheral divider and
+shift state, host-facing serial queues, and pending events. `load_state()`
+decodes the complete payload and validates the exact internal-register-file
+length before mutating the machine, then recomputes the MMU page cache because
+it is derived from the restored internal registers.
+
+The generic `HostBus` and any external device or External-region contents it
+owns are outside this snapshot boundary. A host that uses those surfaces must
+checkpoint and restore them alongside the returned core bytes. Repeated saves
+of the same core state are byte-identical, and resuming from a snapshot uses
+the same instruction-level scheduling boundaries documented above.
+
 ## Intentional approximations
 
 ### Bus phases

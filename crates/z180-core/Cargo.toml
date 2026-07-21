@@ -3,7 +3,13 @@ name = "z180-core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+state = ["dep:postcard", "dep:serde"]
+
 [dependencies]
+postcard = { version = "1", default-features = false, features = ["alloc"], optional = true }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"], optional = true }
 
 [dev-dependencies]
 proptest = "1"

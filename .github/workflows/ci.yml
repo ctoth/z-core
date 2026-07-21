@@ -24,5 +24,9 @@ jobs:
         run: cargo fmt --check
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run state feature Clippy
+        run: cargo clippy -p z180-core --all-targets --features state -- -D warnings
       - name: Run tests
         run: cargo test --workspace
+      - name: Run state feature tests
+        run: cargo test -p z180-core --features state

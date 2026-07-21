@@ -15,6 +15,7 @@ pub enum Reg {
     IR,
 }
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Registers {
     pc: u16,
