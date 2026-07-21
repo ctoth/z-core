@@ -13,6 +13,7 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use memory::Memory;
+use optable::{HALT_IDLE_CYCLES, SECOND_OPCODE_TRAP_CYCLES, THIRD_OPCODE_TRAP_CYCLES};
 use registers::Registers;
 
 const FLAG_S: u8 = 0x80;
@@ -48,6 +49,9 @@ pub struct Z180<B: HostBus> {
     bus: B,
     instruction_pc: u16,
     cycle_count: u64,
+    variant: Variant,
+    timing_branch_taken: bool,
+    timing_repeat_iterations: u16,
     halted: bool,
     sleeping: bool,
     itc: u8,
@@ -66,6 +70,9 @@ impl<B: HostBus> Z180<B> {
             bus,
             instruction_pc: 0,
             cycle_count: 0,
+            variant: config.variant,
+            timing_branch_taken: false,
+            timing_repeat_iterations: 0,
             halted: false,
             sleeping: false,
             itc: 0x01,
@@ -80,6 +87,8 @@ impl<B: HostBus> Z180<B> {
     pub fn reset(&mut self) {
         self.registers = Registers::default();
         self.instruction_pc = 0;
+        self.timing_branch_taken = false;
+        self.timing_repeat_iterations = 0;
         self.halted = false;
         self.sleeping = false;
         self.itc = 0x01;
@@ -95,8 +104,11 @@ impl<B: HostBus> Z180<B> {
             return self.finish_step(cycles);
         }
 
-        if self.halted || self.sleeping {
-            return self.finish_step(1);
+        if self.halted {
+            return self.finish_step(u32::from(HALT_IDLE_CYCLES));
+        }
+        if self.sleeping {
+            return 0;
         }
 
         let pc = self.registers.get(Reg::PC);
@@ -144,7 +156,12 @@ impl<B: HostBus> Z180<B> {
             } else {
                 self.take_trap([first_opcode, 0, 0], 1, pc.wrapping_add(1), false, 1);
             }
-            return self.finish_step(1);
+            let cycles = if is_indexed_bit {
+                THIRD_OPCODE_TRAP_CYCLES
+            } else {
+                SECOND_OPCODE_TRAP_CYCLES
+            };
+            return self.finish_step(u32::from(cycles));
         };
         debug_assert!(!descriptor.mnemonic.is_empty());
         debug_assert!(descriptor.length != 0);
@@ -160,11 +177,21 @@ impl<B: HostBus> Z180<B> {
         // establish a fresh one-instruction shadow.
         self.ei_shadow = false;
 
+        self.timing_branch_taken = false;
+        self.timing_repeat_iterations = 0;
         handler(self, opcode);
 
-        // Phase 1 deliberately has no timing model. This non-hardware unit lets
-        // the execution skeleton make progress until UM0050 timings land in P4.
-        self.finish_step(descriptor.cycles.map_or(1, u32::from))
+        let repeat_completed = self.registers.get(Reg::PC) != self.instruction_pc;
+        let cycles = descriptor
+            .cycles
+            .expect("implemented opcode is missing UM0050 timing")
+            .resolve(
+                self.variant,
+                self.timing_branch_taken,
+                self.timing_repeat_iterations,
+                repeat_completed,
+            );
+        self.finish_step(cycles)
     }
 
     pub fn run(&mut self, cycles: u32) -> u32 {
@@ -1006,6 +1033,7 @@ impl<B: HostBus> Z180<B> {
                     if !repeat || next_b == 0 {
                         break;
                     }
+                    self.timing_repeat_iterations = self.timing_repeat_iterations.saturating_add(1);
                 }
             }
             0xa0 | 0xa8 | 0xb0 | 0xb8 => {
@@ -1026,6 +1054,7 @@ impl<B: HostBus> Z180<B> {
                 }
                 self.set_flags(flags);
                 if repeat && count != 0 {
+                    self.timing_repeat_iterations = 1;
                     self.registers
                         .set(Reg::PC, self.registers.get(Reg::PC).wrapping_sub(2));
                 }
@@ -1050,6 +1079,7 @@ impl<B: HostBus> Z180<B> {
                 }
                 self.set_flags(flags);
                 if repeat && count != 0 && result != 0 {
+                    self.timing_repeat_iterations = 1;
                     self.registers
                         .set(Reg::PC, self.registers.get(Reg::PC).wrapping_sub(2));
                 }
@@ -1110,6 +1140,7 @@ impl<B: HostBus> Z180<B> {
                 }
                 self.set_flags(flags);
                 if repeat && next_b != 0 {
+                    self.timing_repeat_iterations = 1;
                     self.registers
                         .set(Reg::PC, self.registers.get(Reg::PC).wrapping_sub(2));
                 }
@@ -1228,6 +1259,7 @@ impl<B: HostBus> Z180<B> {
         let next_b = b.wrapping_sub(1);
         self.registers.set(Reg::BC, u16::from_be_bytes([next_b, c]));
         if next_b != 0 {
+            self.timing_branch_taken = true;
             let displacement = self.immediate8();
             self.registers
                 .set(Reg::PC, self.relative_target(displacement));
@@ -1242,6 +1274,7 @@ impl<B: HostBus> Z180<B> {
 
     pub(crate) fn execute_jr_condition(&mut self, opcode: u8) {
         if self.condition((opcode >> 3) & 0x03) {
+            self.timing_branch_taken = true;
             let displacement = self.immediate8();
             self.registers
                 .set(Reg::PC, self.relative_target(displacement));
@@ -1250,6 +1283,7 @@ impl<B: HostBus> Z180<B> {
 
     pub(crate) fn execute_ret_condition(&mut self, opcode: u8) {
         if self.condition((opcode >> 3) & 0x07) {
+            self.timing_branch_taken = true;
             let target = self.pop_word();
             self.registers.set(Reg::PC, target);
         }
@@ -1262,6 +1296,7 @@ impl<B: HostBus> Z180<B> {
 
     pub(crate) fn execute_jp_condition(&mut self, opcode: u8) {
         if self.condition((opcode >> 3) & 0x07) {
+            self.timing_branch_taken = true;
             let target = self.immediate16();
             self.registers.set(Reg::PC, target);
         }
@@ -1269,6 +1304,7 @@ impl<B: HostBus> Z180<B> {
 
     pub(crate) fn execute_call_condition(&mut self, opcode: u8) {
         if self.condition((opcode >> 3) & 0x07) {
+            self.timing_branch_taken = true;
             let target = self.immediate16();
             self.push_word(self.registers.get(Reg::PC));
             self.registers.set(Reg::PC, target);
@@ -1501,7 +1537,7 @@ mod tests {
             cpu.set_iff1(true);
             cpu.set_iff2(false);
 
-            assert_eq!(cpu.step(), 1, "{opcodes:02x?}");
+            assert_eq!(cpu.step(), 17, "{opcodes:02x?}");
             assert_eq!(cpu.instruction_pc(), 0x1234, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::PC), 0, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{opcodes:02x?}");
@@ -1511,7 +1547,7 @@ mod tests {
             assert_eq!(cpu.itc(), 0x81, "{opcodes:02x?}");
             assert!(cpu.iff1(), "{opcodes:02x?}");
             assert!(!cpu.iff2(), "{opcodes:02x?}");
-            assert_eq!(cpu.cycle_count(), 1, "{opcodes:02x?}");
+            assert_eq!(cpu.cycle_count(), 17, "{opcodes:02x?}");
             assert_eq!(
                 cpu.drain_events(),
                 vec![Event::Trap {
@@ -1540,7 +1576,7 @@ mod tests {
             cpu.set_iff1(false);
             cpu.set_iff2(true);
 
-            assert_eq!(cpu.step(), 1, "{prefix:02x}");
+            assert_eq!(cpu.step(), 23, "{prefix:02x}");
             assert_eq!(cpu.instruction_pc(), 0x1234, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::PC), 0, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{prefix:02x}");
@@ -1550,7 +1586,7 @@ mod tests {
             assert_eq!(cpu.itc(), 0xc1, "{prefix:02x}");
             assert!(!cpu.iff1(), "{prefix:02x}");
             assert!(cpu.iff2(), "{prefix:02x}");
-            assert_eq!(cpu.cycle_count(), 1, "{prefix:02x}");
+            assert_eq!(cpu.cycle_count(), 23, "{prefix:02x}");
             assert_eq!(
                 cpu.drain_events(),
                 vec![Event::Trap {
@@ -1577,7 +1613,7 @@ mod tests {
                 cpu.reset();
                 cpu.set_reg(Reg::AF, u16::from_be_bytes([accumulator, initial_flags]));
 
-                assert_eq!(cpu.step(), 1);
+                assert_eq!(cpu.step(), 4);
 
                 let [actual_accumulator, actual_flags] = cpu.reg(Reg::AF).to_be_bytes();
                 let (expected_accumulator, expected_flags) =
@@ -1600,12 +1636,12 @@ mod tests {
         cpu.mem_poke(3, 0xfb);
         cpu.mem_poke(4, 0xf3);
 
-        cpu.step();
+        assert_eq!(cpu.step(), 3);
         assert!(cpu.iff1());
         assert!(cpu.iff2());
         assert!(cpu.ei_shadow);
 
-        cpu.step();
+        assert_eq!(cpu.step(), 3);
         assert!(!cpu.ei_shadow);
 
         cpu.step();
@@ -1659,14 +1695,14 @@ mod tests {
         cpu.set_reg(Reg::BC, 0x89ab);
         cpu.set_reg(Reg::IR, 0x34ff);
 
-        assert_eq!(cpu.step(), 1);
+        assert_eq!(cpu.step(), 3);
 
         assert_eq!(cpu.instruction_pc(), 0x1234);
         assert_eq!(cpu.reg(Reg::PC), 0x1235);
         assert_eq!(cpu.reg(Reg::AF), 0x56d7);
         assert_eq!(cpu.reg(Reg::BC), 0x89ab);
         assert_eq!(cpu.reg(Reg::IR), 0x3480);
-        assert_eq!(cpu.cycle_count(), 1);
+        assert_eq!(cpu.cycle_count(), 3);
         assert!(!cpu.halted());
     }
 
@@ -1676,7 +1712,8 @@ mod tests {
         cpu.mem_poke(0, 0x76);
         cpu.set_reg(Reg::AF, 0x12a5);
 
-        cpu.step();
+        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.step(), 3);
 
         assert!(cpu.halted());
         assert_eq!(cpu.reg(Reg::PC), 1);
@@ -1762,7 +1799,7 @@ mod tests {
             cpu.set_reg(Reg::BC, 0x0210);
             cpu.set_reg(Reg::HL, initial_hl);
 
-            assert_eq!(cpu.step(), 1, "ED {opcode:02x}");
+            assert_eq!(cpu.step(), 30, "ED {opcode:02x}");
             assert_eq!(cpu.reg(Reg::AF), 0x5546, "ED {opcode:02x}");
             assert_eq!(cpu.reg(Reg::BC), u16::from(final_c), "ED {opcode:02x}");
             assert_eq!(cpu.reg(Reg::HL), final_hl, "ED {opcode:02x}");
@@ -1780,7 +1817,7 @@ mod tests {
         reti.set_iff1(false);
         reti.set_iff2(true);
 
-        reti.step();
+        assert_eq!(reti.step(), 22);
 
         assert_eq!(reti.reg(Reg::PC), 0x1234);
         assert_eq!(reti.reg(Reg::SP), 0x2002);
@@ -1796,11 +1833,68 @@ mod tests {
         retn.set_iff1(false);
         retn.set_iff2(true);
 
-        retn.step();
+        assert_eq!(retn.step(), 12);
 
         assert_eq!(retn.reg(Reg::PC), 0x5678);
         assert_eq!(retn.reg(Reg::SP), 0x2002);
         assert!(retn.iff1());
         assert!(retn.iff2());
+
+        let config = MachineConfig {
+            variant: Variant::Z8S180,
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1_0000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        let mut z8s180_reti =
+            Z180::new(config, NullBus).expect("flat Z8S180 RAM configuration must be valid");
+        z8s180_reti.mem_poke(0, 0xed);
+        z8s180_reti.mem_poke(1, 0x4d);
+        z8s180_reti.mem_poke(0x2000, 0x34);
+        z8s180_reti.mem_poke(0x2001, 0x12);
+        z8s180_reti.set_reg(Reg::SP, 0x2000);
+        assert_eq!(z8s180_reti.step(), 12);
+    }
+
+    #[test]
+    fn timing_selects_conditional_and_repeat_paths() {
+        let mut call_not_taken = machine();
+        call_not_taken.mem_poke(0, 0xc4);
+        call_not_taken.mem_poke(1, 0x34);
+        call_not_taken.mem_poke(2, 0x12);
+        call_not_taken.set_reg(Reg::AF, u16::from(FLAG_Z));
+        assert_eq!(call_not_taken.step(), 6);
+        assert_eq!(call_not_taken.reg(Reg::PC), 3);
+
+        let mut call_taken = machine();
+        call_taken.mem_poke(0, 0xc4);
+        call_taken.mem_poke(1, 0x34);
+        call_taken.mem_poke(2, 0x12);
+        call_taken.set_reg(Reg::SP, 0x2000);
+        assert_eq!(call_taken.step(), 16);
+        assert_eq!(call_taken.reg(Reg::PC), 0x1234);
+
+        let mut ldir_terminal = machine();
+        ldir_terminal.mem_poke(0, 0xed);
+        ldir_terminal.mem_poke(1, 0xb0);
+        ldir_terminal.mem_poke(0x1000, 0x5a);
+        ldir_terminal.set_reg(Reg::BC, 1);
+        ldir_terminal.set_reg(Reg::DE, 0x2000);
+        ldir_terminal.set_reg(Reg::HL, 0x1000);
+        assert_eq!(ldir_terminal.step(), 12);
+        assert_eq!(ldir_terminal.reg(Reg::PC), 2);
+
+        let mut ldir_repeating = machine();
+        ldir_repeating.mem_poke(0, 0xed);
+        ldir_repeating.mem_poke(1, 0xb0);
+        ldir_repeating.mem_poke(0x1000, 0x5a);
+        ldir_repeating.set_reg(Reg::BC, 2);
+        ldir_repeating.set_reg(Reg::DE, 0x2000);
+        ldir_repeating.set_reg(Reg::HL, 0x1000);
+        assert_eq!(ldir_repeating.step(), 14);
+        assert_eq!(ldir_repeating.reg(Reg::PC), 0);
     }
 }

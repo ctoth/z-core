@@ -1075,6 +1075,43 @@ Phase 4 task 1 is the next unchecked plan item.
 
 ## Phase 4 — Timing and ZEXDOC
 
+### P4.1 — UM0050 cycle-count transcription (2026-07-21)
+
+Every implemented main, CB, ED, DD, FD, DDCB, and FDCB opcode now carries
+its Z180 cycle metadata in `optable.rs`, the sole production owner of cycle
+numbers. The metadata represents fixed, conditional taken/untaken,
+terminal/repeating block-operation, and Z80180/Z8S180 variant timing. Runtime
+dispatch resolves the executed path after each instruction. HALT idle and
+second-/third-opcode TRAP totals also use table-owned constants.
+
+The values were transcribed by direct page-image reading of UM0050 Tables
+38–47. The verification log records those tables plus the interrupt timing
+figures: NMI 11 states, INT0 Mode 0 with the shown RST response 13, INT0 Mode
+1 11, and vectored acknowledgement 18. It also records the complete 17- and
+23-state second-/third-opcode TRAP totals and the baseline Z80180 RETI
+22-state refetch sequence versus the later Z8S180 12-state form.
+
+Coverage and repository gates pass:
+
+```text
+> cargo test -p z180-core timing
+4 passed; 0 failed
+
+> cargo test --workspace
+z180-cli: 15 passed; 0 failed
+z180-core: 25 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo]
+
+> cargo fmt --all -- --check
+```
+
+The format check completed successfully with no output. Gate G4 remains in
+progress; Phase 4 task 2, DCNTL memory/I-O wait-state insertion, is the next
+unchecked plan item.
+
 ## Phase 5 — Interrupts, MMU, internal I/O window
 
 ## Phase 6 — On-chip peripherals

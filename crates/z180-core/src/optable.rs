@@ -1,6 +1,72 @@
-use crate::{HostBus, Z180};
+use crate::{HostBus, Variant, Z180};
 
 pub(crate) type Handler<B> = fn(&mut Z180<B>, u8);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CycleCount {
+    Fixed(u8),
+    Conditional { not_taken: u8, taken: u8 },
+    Repeat { terminal: u8, repeating: u8 },
+    Variant { z80180: u8, z8s180: u8 },
+}
+
+impl CycleCount {
+    pub(crate) fn resolve(
+        self,
+        variant: Variant,
+        branch_taken: bool,
+        repeat_iterations: u16,
+        repeat_completed: bool,
+    ) -> u32 {
+        match self {
+            Self::Fixed(cycles) => u32::from(cycles),
+            Self::Conditional { not_taken, taken } => {
+                u32::from(if branch_taken { taken } else { not_taken })
+            }
+            Self::Repeat {
+                terminal,
+                repeating,
+            } => {
+                let repeating = u32::from(repeating) * u32::from(repeat_iterations);
+                if repeat_iterations == 0 {
+                    u32::from(terminal)
+                } else if repeat_completed {
+                    repeating + u32::from(terminal)
+                } else {
+                    repeating
+                }
+            }
+            Self::Variant { z80180, z8s180 } => u32::from(match variant {
+                Variant::Z80180 => z80180,
+                Variant::Z8S180 => z8s180,
+            }),
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
+)]
+pub(crate) const NMI_ACKNOWLEDGE_CYCLES: u8 = 11;
+#[allow(
+    dead_code,
+    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
+)]
+pub(crate) const INT0_MODE0_RST_CYCLES: u8 = 13;
+#[allow(
+    dead_code,
+    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
+)]
+pub(crate) const INT0_MODE1_ACKNOWLEDGE_CYCLES: u8 = 11;
+#[allow(
+    dead_code,
+    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
+)]
+pub(crate) const VECTORED_ACKNOWLEDGE_CYCLES: u8 = 18;
+pub(crate) const HALT_IDLE_CYCLES: u8 = 3;
+pub(crate) const SECOND_OPCODE_TRAP_CYCLES: u8 = 17;
+pub(crate) const THIRD_OPCODE_TRAP_CYCLES: u8 = 23;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OperandKind {
@@ -37,7 +103,7 @@ pub(crate) struct Opcode<B: HostBus> {
     )]
     pub(crate) operands: [OperandKind; 2],
     pub(crate) length: u8,
-    pub(crate) cycles: Option<u8>,
+    pub(crate) cycles: Option<CycleCount>,
     pub(crate) handler: Option<Handler<B>>,
 }
 
@@ -62,15 +128,14 @@ impl<B: HostBus> Opcode<B> {
         mnemonic: &'static str,
         operands: [OperandKind; 2],
         length: u8,
+        cycles: CycleCount,
         handler: Handler<B>,
     ) -> Self {
         Self {
             mnemonic,
             operands,
             length,
-            // Hardware cycle counts are deliberately absent until Phase 4
-            // verifies and transcribes the UM0050 timing tables.
-            cycles: None,
+            cycles: Some(cycles),
             handler: Some(handler),
         }
     }
@@ -79,7 +144,13 @@ impl<B: HostBus> Opcode<B> {
 const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
     let mut table = [Opcode::UNIMPLEMENTED; 256];
 
-    table[0x00] = Opcode::implemented("NOP", [OperandKind::None; 2], 1, Z180::<B>::execute_nop);
+    table[0x00] = Opcode::implemented(
+        "NOP",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_nop,
+    );
 
     let mut pair = 0_usize;
     while pair < 4 {
@@ -87,24 +158,28 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             "LD {rr},{nn}",
             [OperandKind::Reg16, OperandKind::Immediate16],
             3,
+            CycleCount::Fixed(9),
             Z180::<B>::execute_ld_reg16_immediate,
         );
         table[0x03 + pair * 0x10] = Opcode::implemented(
             "INC {rr}",
             [OperandKind::Reg16, OperandKind::None],
             1,
+            CycleCount::Fixed(4),
             Z180::<B>::execute_inc_reg16,
         );
         table[0x09 + pair * 0x10] = Opcode::implemented(
             "ADD HL,{rr}",
             [OperandKind::Reg16Hl, OperandKind::Reg16],
             1,
+            CycleCount::Fixed(7),
             Z180::<B>::execute_add_hl,
         );
         table[0x0b + pair * 0x10] = Opcode::implemented(
             "DEC {rr}",
             [OperandKind::Reg16, OperandKind::None],
             1,
+            CycleCount::Fixed(4),
             Z180::<B>::execute_dec_reg16,
         );
         pair += 1;
@@ -114,24 +189,28 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
         "LD (BC),A",
         [OperandKind::IndirectBc, OperandKind::Accumulator],
         1,
+        CycleCount::Fixed(7),
         Z180::<B>::execute_ld_indirect_a,
     );
     table[0x0a] = Opcode::implemented(
         "LD A,(BC)",
         [OperandKind::Accumulator, OperandKind::IndirectBc],
         1,
+        CycleCount::Fixed(6),
         Z180::<B>::execute_ld_a_indirect,
     );
     table[0x12] = Opcode::implemented(
         "LD (DE),A",
         [OperandKind::IndirectDe, OperandKind::Accumulator],
         1,
+        CycleCount::Fixed(7),
         Z180::<B>::execute_ld_indirect_a,
     );
     table[0x1a] = Opcode::implemented(
         "LD A,(DE)",
         [OperandKind::Accumulator, OperandKind::IndirectDe],
         1,
+        CycleCount::Fixed(6),
         Z180::<B>::execute_ld_a_indirect,
     );
 
@@ -141,18 +220,33 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             "INC {r}",
             [OperandKind::Reg8Destination, OperandKind::None],
             1,
+            if register == 6 {
+                CycleCount::Fixed(10)
+            } else {
+                CycleCount::Fixed(4)
+            },
             Z180::<B>::execute_inc_reg8,
         );
         table[0x05 + register * 8] = Opcode::implemented(
             "DEC {r}",
             [OperandKind::Reg8Destination, OperandKind::None],
             1,
+            if register == 6 {
+                CycleCount::Fixed(10)
+            } else {
+                CycleCount::Fixed(4)
+            },
             Z180::<B>::execute_dec_reg8,
         );
         table[0x06 + register * 8] = Opcode::implemented(
             "LD {r},{n}",
             [OperandKind::Reg8Destination, OperandKind::Immediate8],
             2,
+            if register == 6 {
+                CycleCount::Fixed(9)
+            } else {
+                CycleCount::Fixed(6)
+            },
             Z180::<B>::execute_ld_reg8_immediate,
         );
         register += 1;
@@ -162,42 +256,52 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
         "RLCA",
         [OperandKind::Accumulator, OperandKind::None],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_accumulator_rotate,
     );
     table[0x08] = Opcode::implemented(
         "EX AF,AF'",
         [OperandKind::None; 2],
         1,
+        CycleCount::Fixed(4),
         Z180::<B>::execute_ex_af,
     );
     table[0x0f] = Opcode::implemented(
         "RRCA",
         [OperandKind::Accumulator, OperandKind::None],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_accumulator_rotate,
     );
     table[0x10] = Opcode::implemented(
         "DJNZ {rel}",
         [OperandKind::Relative8, OperandKind::None],
         2,
+        CycleCount::Conditional {
+            not_taken: 7,
+            taken: 9,
+        },
         Z180::<B>::execute_djnz,
     );
     table[0x17] = Opcode::implemented(
         "RLA",
         [OperandKind::Accumulator, OperandKind::None],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_accumulator_rotate,
     );
     table[0x18] = Opcode::implemented(
         "JR {rel}",
         [OperandKind::Relative8, OperandKind::None],
         2,
+        CycleCount::Fixed(8),
         Z180::<B>::execute_jr,
     );
     table[0x1f] = Opcode::implemented(
         "RRA",
         [OperandKind::Accumulator, OperandKind::None],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_accumulator_rotate,
     );
 
@@ -207,6 +311,10 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             "JR {cc},{rel}",
             [OperandKind::Condition, OperandKind::Relative8],
             2,
+            CycleCount::Conditional {
+                not_taken: 6,
+                taken: 8,
+            },
             Z180::<B>::execute_jr_condition,
         );
         relative_condition += 1;
@@ -216,40 +324,58 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
         "LD ({nn}),HL",
         [OperandKind::IndirectImmediate16, OperandKind::Reg16Hl],
         3,
+        CycleCount::Fixed(16),
         Z180::<B>::execute_ld_absolute_hl,
     );
     table[0x27] = Opcode::implemented(
         "DAA",
         [OperandKind::Accumulator, OperandKind::None],
         1,
+        CycleCount::Fixed(4),
         Z180::<B>::execute_daa,
     );
     table[0x2a] = Opcode::implemented(
         "LD HL,({nn})",
         [OperandKind::Reg16Hl, OperandKind::IndirectImmediate16],
         3,
+        CycleCount::Fixed(15),
         Z180::<B>::execute_ld_hl_absolute,
     );
     table[0x2f] = Opcode::implemented(
         "CPL",
         [OperandKind::Accumulator, OperandKind::None],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_cpl,
     );
     table[0x32] = Opcode::implemented(
         "LD ({nn}),A",
         [OperandKind::IndirectImmediate16, OperandKind::Accumulator],
         3,
+        CycleCount::Fixed(13),
         Z180::<B>::execute_ld_absolute_a,
     );
-    table[0x37] = Opcode::implemented("SCF", [OperandKind::None; 2], 1, Z180::<B>::execute_scf);
+    table[0x37] = Opcode::implemented(
+        "SCF",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_scf,
+    );
     table[0x3a] = Opcode::implemented(
         "LD A,({nn})",
         [OperandKind::Accumulator, OperandKind::IndirectImmediate16],
         3,
+        CycleCount::Fixed(12),
         Z180::<B>::execute_ld_a_absolute,
     );
-    table[0x3f] = Opcode::implemented("CCF", [OperandKind::None; 2], 1, Z180::<B>::execute_ccf);
+    table[0x3f] = Opcode::implemented(
+        "CCF",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_ccf,
+    );
 
     let mut opcode = 0x40_usize;
     while opcode <= 0x7f {
@@ -258,13 +384,26 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
                 "LD {dst},{src}",
                 [OperandKind::Reg8Destination, OperandKind::Reg8Source],
                 1,
+                if opcode & 0x07 == 6 {
+                    CycleCount::Fixed(6)
+                } else if (opcode >> 3) & 0x07 == 6 {
+                    CycleCount::Fixed(7)
+                } else {
+                    CycleCount::Fixed(4)
+                },
                 Z180::<B>::execute_ld_block,
             );
         }
         opcode += 1;
     }
 
-    table[0x76] = Opcode::implemented("HALT", [OperandKind::None; 2], 1, Z180::<B>::execute_halt);
+    table[0x76] = Opcode::implemented(
+        "HALT",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_halt,
+    );
 
     opcode = 0x80;
     while opcode <= 0xbf {
@@ -282,6 +421,11 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             mnemonic,
             [OperandKind::Accumulator, OperandKind::Reg8Source],
             1,
+            if opcode & 0x07 == 6 {
+                CycleCount::Fixed(6)
+            } else {
+                CycleCount::Fixed(4)
+            },
             Z180::<B>::execute_alu_reg8,
         );
         opcode += 1;
@@ -293,18 +437,30 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             "RET {cc}",
             [OperandKind::Condition, OperandKind::None],
             1,
+            CycleCount::Conditional {
+                not_taken: 5,
+                taken: 10,
+            },
             Z180::<B>::execute_ret_condition,
         );
         table[0xc2 + condition * 8] = Opcode::implemented(
             "JP {cc},{nn}",
             [OperandKind::Condition, OperandKind::Immediate16],
             3,
+            CycleCount::Conditional {
+                not_taken: 6,
+                taken: 9,
+            },
             Z180::<B>::execute_jp_condition,
         );
         table[0xc4 + condition * 8] = Opcode::implemented(
             "CALL {cc},{nn}",
             [OperandKind::Condition, OperandKind::Immediate16],
             3,
+            CycleCount::Conditional {
+                not_taken: 6,
+                taken: 16,
+            },
             Z180::<B>::execute_call_condition,
         );
         condition += 1;
@@ -316,12 +472,14 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             "POP {qq}",
             [OperandKind::Reg16Stack, OperandKind::None],
             1,
+            CycleCount::Fixed(9),
             Z180::<B>::execute_pop,
         );
         table[0xc5 + pair * 0x10] = Opcode::implemented(
             "PUSH {qq}",
             [OperandKind::Reg16Stack, OperandKind::None],
             1,
+            CycleCount::Fixed(11),
             Z180::<B>::execute_push,
         );
         pair += 1;
@@ -343,12 +501,14 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
             mnemonic,
             [OperandKind::Accumulator, OperandKind::Immediate8],
             2,
+            CycleCount::Fixed(6),
             Z180::<B>::execute_alu_immediate,
         );
         table[0xc7 + operation * 8] = Opcode::implemented(
             "RST {vector}",
             [OperandKind::RestartVector, OperandKind::None],
             1,
+            CycleCount::Fixed(11),
             Z180::<B>::execute_rst,
         );
         operation += 1;
@@ -358,54 +518,86 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
         "JP {nn}",
         [OperandKind::Immediate16, OperandKind::None],
         3,
+        CycleCount::Fixed(9),
         Z180::<B>::execute_jp,
     );
-    table[0xc9] = Opcode::implemented("RET", [OperandKind::None; 2], 1, Z180::<B>::execute_ret);
+    table[0xc9] = Opcode::implemented(
+        "RET",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(9),
+        Z180::<B>::execute_ret,
+    );
     table[0xcd] = Opcode::implemented(
         "CALL {nn}",
         [OperandKind::Immediate16, OperandKind::None],
         3,
+        CycleCount::Fixed(16),
         Z180::<B>::execute_call,
     );
     table[0xd3] = Opcode::implemented(
         "OUT ({n}),A",
         [OperandKind::PortImmediate, OperandKind::Accumulator],
         2,
+        CycleCount::Fixed(10),
         Z180::<B>::execute_out_immediate,
     );
-    table[0xd9] = Opcode::implemented("EXX", [OperandKind::None; 2], 1, Z180::<B>::execute_exx);
+    table[0xd9] = Opcode::implemented(
+        "EXX",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_exx,
+    );
     table[0xdb] = Opcode::implemented(
         "IN A,({n})",
         [OperandKind::Accumulator, OperandKind::PortImmediate],
         2,
+        CycleCount::Fixed(9),
         Z180::<B>::execute_in_immediate,
     );
     table[0xe3] = Opcode::implemented(
         "EX (SP),HL",
         [OperandKind::IndirectSp, OperandKind::Reg16Hl],
         1,
+        CycleCount::Fixed(16),
         Z180::<B>::execute_ex_sp_hl,
     );
     table[0xe9] = Opcode::implemented(
         "JP (HL)",
         [OperandKind::IndirectHl, OperandKind::None],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_jp_hl,
     );
     table[0xeb] = Opcode::implemented(
         "EX DE,HL",
         [OperandKind::None; 2],
         1,
+        CycleCount::Fixed(3),
         Z180::<B>::execute_ex_de_hl,
     );
-    table[0xf3] = Opcode::implemented("DI", [OperandKind::None; 2], 1, Z180::<B>::execute_di);
+    table[0xf3] = Opcode::implemented(
+        "DI",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_di,
+    );
     table[0xf9] = Opcode::implemented(
         "LD SP,HL",
         [OperandKind::Reg16Sp, OperandKind::Reg16Hl],
         1,
+        CycleCount::Fixed(4),
         Z180::<B>::execute_ld_sp_hl,
     );
-    table[0xfb] = Opcode::implemented("EI", [OperandKind::None; 2], 1, Z180::<B>::execute_ei);
+    table[0xfb] = Opcode::implemented(
+        "EI",
+        [OperandKind::None; 2],
+        1,
+        CycleCount::Fixed(3),
+        Z180::<B>::execute_ei,
+    );
 
     table
 }
@@ -429,6 +621,11 @@ const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
                 mnemonic,
                 [OperandKind::Reg8Destination, OperandKind::None],
                 2,
+                if opcode & 0x07 == 6 {
+                    CycleCount::Fixed(13)
+                } else {
+                    CycleCount::Fixed(7)
+                },
                 Z180::<B>::execute_cb_rotate_shift,
             );
         }
@@ -440,6 +637,11 @@ const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
             "BIT {bit},{r}",
             [OperandKind::Bit, OperandKind::Reg8Source],
             2,
+            if opcode & 0x07 == 6 {
+                CycleCount::Fixed(9)
+            } else {
+                CycleCount::Fixed(6)
+            },
             Z180::<B>::execute_cb_bit,
         );
         opcode += 1;
@@ -450,6 +652,11 @@ const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
             "RES {bit},{r}",
             [OperandKind::Bit, OperandKind::Reg8Destination],
             2,
+            if opcode & 0x07 == 6 {
+                CycleCount::Fixed(13)
+            } else {
+                CycleCount::Fixed(7)
+            },
             Z180::<B>::execute_cb_res,
         );
         opcode += 1;
@@ -460,6 +667,11 @@ const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
             "SET {bit},{r}",
             [OperandKind::Bit, OperandKind::Reg8Destination],
             2,
+            if opcode & 0x07 == 6 {
+                CycleCount::Fixed(13)
+            } else {
+                CycleCount::Fixed(7)
+            },
             Z180::<B>::execute_cb_set,
         );
         opcode += 1;
@@ -477,6 +689,7 @@ const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
             "ADD {index},{rr}",
             [OperandKind::Reg16Index, OperandKind::Reg16],
             2,
+            CycleCount::Fixed(10),
             Z180::<B>::execute_index::<IY>,
         );
         pair += 1;
@@ -486,48 +699,56 @@ const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
         "LD {index},{nn}",
         [OperandKind::Reg16Index, OperandKind::Immediate16],
         4,
+        CycleCount::Fixed(12),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x22] = Opcode::implemented(
         "LD ({nn}),{index}",
         [OperandKind::IndirectImmediate16, OperandKind::Reg16Index],
         4,
+        CycleCount::Fixed(19),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x23] = Opcode::implemented(
         "INC {index}",
         [OperandKind::Reg16Index, OperandKind::None],
         2,
+        CycleCount::Fixed(7),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x2a] = Opcode::implemented(
         "LD {index},({nn})",
         [OperandKind::Reg16Index, OperandKind::IndirectImmediate16],
         4,
+        CycleCount::Fixed(18),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x2b] = Opcode::implemented(
         "DEC {index}",
         [OperandKind::Reg16Index, OperandKind::None],
         2,
+        CycleCount::Fixed(7),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x34] = Opcode::implemented(
         "INC ({index}+{d})",
         [OperandKind::IndirectIndex, OperandKind::None],
         3,
+        CycleCount::Fixed(18),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x35] = Opcode::implemented(
         "DEC ({index}+{d})",
         [OperandKind::IndirectIndex, OperandKind::None],
         3,
+        CycleCount::Fixed(18),
         Z180::<B>::execute_index::<IY>,
     );
     table[0x36] = Opcode::implemented(
         "LD ({index}+{d}),{n}",
         [OperandKind::IndirectIndex, OperandKind::Immediate8],
         4,
+        CycleCount::Fixed(15),
         Z180::<B>::execute_index::<IY>,
     );
 
@@ -538,12 +759,14 @@ const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
                 "LD {r},({index}+{d})",
                 [OperandKind::Reg8Destination, OperandKind::IndirectIndex],
                 3,
+                CycleCount::Fixed(14),
                 Z180::<B>::execute_index::<IY>,
             );
             table[0x70 + register] = Opcode::implemented(
                 "LD ({index}+{d}),{r}",
                 [OperandKind::IndirectIndex, OperandKind::Reg8Source],
                 3,
+                CycleCount::Fixed(15),
                 Z180::<B>::execute_index::<IY>,
             );
         }
@@ -556,6 +779,7 @@ const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
             "{alu} A,({index}+{d})",
             [OperandKind::Accumulator, OperandKind::IndirectIndex],
             3,
+            CycleCount::Fixed(14),
             Z180::<B>::execute_index::<IY>,
         );
         operation += 1;
@@ -565,30 +789,35 @@ const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
         "POP {index}",
         [OperandKind::Reg16Index, OperandKind::None],
         2,
+        CycleCount::Fixed(12),
         Z180::<B>::execute_index::<IY>,
     );
     table[0xe3] = Opcode::implemented(
         "EX (SP),{index}",
         [OperandKind::IndirectSp, OperandKind::Reg16Index],
         2,
+        CycleCount::Fixed(19),
         Z180::<B>::execute_index::<IY>,
     );
     table[0xe5] = Opcode::implemented(
         "PUSH {index}",
         [OperandKind::Reg16Index, OperandKind::None],
         2,
+        CycleCount::Fixed(14),
         Z180::<B>::execute_index::<IY>,
     );
     table[0xe9] = Opcode::implemented(
         "JP ({index})",
         [OperandKind::Reg16Index, OperandKind::None],
         2,
+        CycleCount::Fixed(6),
         Z180::<B>::execute_index::<IY>,
     );
     table[0xf9] = Opcode::implemented(
         "LD SP,{index}",
         [OperandKind::Reg16Sp, OperandKind::Reg16Index],
         2,
+        CycleCount::Fixed(7),
         Z180::<B>::execute_index::<IY>,
     );
 
@@ -615,6 +844,7 @@ const fn build_index_cb_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] 
                 mnemonic,
                 [OperandKind::IndirectIndex, OperandKind::None],
                 4,
+                CycleCount::Fixed(19),
                 Z180::<B>::execute_index_cb::<IY>,
             );
         }
@@ -627,18 +857,21 @@ const fn build_index_cb_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] 
             "BIT {bit},({index}+{d})",
             [OperandKind::Bit, OperandKind::IndirectIndex],
             4,
+            CycleCount::Fixed(15),
             Z180::<B>::execute_index_cb::<IY>,
         );
         table[0x86 + bit * 8] = Opcode::implemented(
             "RES {bit},({index}+{d})",
             [OperandKind::Bit, OperandKind::IndirectIndex],
             4,
+            CycleCount::Fixed(19),
             Z180::<B>::execute_index_cb::<IY>,
         );
         table[0xc6 + bit * 8] = Opcode::implemented(
             "SET {bit},({index}+{d})",
             [OperandKind::Bit, OperandKind::IndirectIndex],
             4,
+            CycleCount::Fixed(19),
             Z180::<B>::execute_index_cb::<IY>,
         );
         bit += 1;
@@ -657,6 +890,7 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
             "IN0 {g},({n})",
             [OperandKind::Reg8Destination, OperandKind::PortImmediate],
             3,
+            CycleCount::Fixed(12),
             Z180::<B>::execute_ed,
         );
         index += 1;
@@ -669,6 +903,7 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
             "OUT0 ({n}),{g}",
             [OperandKind::PortImmediate, OperandKind::Reg8Source],
             3,
+            CycleCount::Fixed(13),
             Z180::<B>::execute_ed,
         );
         index += 1;
@@ -681,6 +916,11 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
             "TST {g}",
             [OperandKind::Reg8Source, OperandKind::None],
             2,
+            if tst[index] == 0x34 {
+                CycleCount::Fixed(10)
+            } else {
+                CycleCount::Fixed(7)
+            },
             Z180::<B>::execute_ed,
         );
         index += 1;
@@ -696,6 +936,37 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
     index = 0;
     while index < standard.len() {
         let opcode = standard[index];
+        let cycles = match opcode {
+            0x40 | 0x48 | 0x50 | 0x58 | 0x60 | 0x68 | 0x78 => CycleCount::Fixed(9),
+            0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x79 => CycleCount::Fixed(10),
+            0x42 | 0x4a | 0x52 | 0x5a | 0x62 | 0x6a | 0x72 | 0x7a => CycleCount::Fixed(10),
+            0x43 | 0x53 | 0x63 | 0x73 => CycleCount::Fixed(19),
+            0x4b | 0x5b | 0x6b | 0x7b => CycleCount::Fixed(18),
+            0x44 => CycleCount::Fixed(6),
+            0x45 => CycleCount::Fixed(12),
+            0x46 | 0x56 | 0x5e => CycleCount::Fixed(6),
+            0x47 | 0x4f | 0x57 | 0x5f => CycleCount::Fixed(6),
+            0x4c | 0x5c | 0x6c | 0x7c => CycleCount::Fixed(17),
+            0x4d => CycleCount::Variant {
+                z80180: 22,
+                z8s180: 12,
+            },
+            0x64 => CycleCount::Fixed(9),
+            0x67 | 0x6f => CycleCount::Fixed(16),
+            0x74 => CycleCount::Fixed(12),
+            0x76 => CycleCount::Fixed(8),
+            0x83 | 0x8b => CycleCount::Fixed(14),
+            0x93 | 0x9b => CycleCount::Repeat {
+                terminal: 14,
+                repeating: 16,
+            },
+            0xa0 | 0xa1 | 0xa2 | 0xa3 | 0xa8 | 0xa9 | 0xaa | 0xab => CycleCount::Fixed(12),
+            0xb0 | 0xb1 | 0xb2 | 0xb3 | 0xb8 | 0xb9 | 0xba | 0xbb => CycleCount::Repeat {
+                terminal: 12,
+                repeating: 14,
+            },
+            _ => panic!("defined ED opcode is missing UM0050 timing"),
+        };
         let length = if matches!(
             opcode,
             0x43 | 0x4b | 0x53 | 0x5b | 0x63 | 0x6b | 0x73 | 0x7b
@@ -710,6 +981,7 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
             "{ed}",
             [OperandKind::None; 2],
             length,
+            cycles,
             Z180::<B>::execute_ed,
         );
         index += 1;
@@ -762,7 +1034,7 @@ mod tests {
         let table = &Z180::<NullBus>::MAIN_OPCODES;
         assert_eq!(table[0x00].mnemonic, "NOP");
         assert_eq!(table[0x00].length, 1);
-        assert_eq!(table[0x00].cycles, None);
+        assert_eq!(table[0x00].cycles, Some(CycleCount::Fixed(3)));
         assert_eq!(table[0x76].mnemonic, "HALT");
         assert_eq!(table[0x78].mnemonic, "LD {dst},{src}");
         assert_eq!(table[0x01].length, 3);
@@ -867,5 +1139,100 @@ mod tests {
         assert!(table[0x02].handler.is_none());
         assert!(table[0x4e].handler.is_none());
         assert!(table[0xff].handler.is_none());
+    }
+
+    #[test]
+    fn every_implemented_opcode_has_um0050_timing() {
+        for table in [
+            &Z180::<NullBus>::MAIN_OPCODES,
+            &Z180::<NullBus>::CB_OPCODES,
+            &Z180::<NullBus>::DD_OPCODES,
+            &Z180::<NullBus>::FD_OPCODES,
+            &Z180::<NullBus>::DDCB_OPCODES,
+            &Z180::<NullBus>::FDCB_OPCODES,
+            &Z180::<NullBus>::ED_OPCODES,
+        ] {
+            for (opcode, entry) in table.iter().enumerate() {
+                assert_eq!(
+                    entry.cycles.is_some(),
+                    entry.handler.is_some(),
+                    "opcode table entry {opcode:02x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn timing_metadata_covers_fixed_conditional_repeat_and_variant_rows() {
+        let main = &Z180::<NullBus>::MAIN_OPCODES;
+        let cb = &Z180::<NullBus>::CB_OPCODES;
+        let dd = &Z180::<NullBus>::DD_OPCODES;
+        let ed = &Z180::<NullBus>::ED_OPCODES;
+
+        assert_eq!(main[0x78].cycles, Some(CycleCount::Fixed(4)));
+        assert_eq!(main[0x46].cycles, Some(CycleCount::Fixed(6)));
+        assert_eq!(main[0x70].cycles, Some(CycleCount::Fixed(7)));
+        assert_eq!(
+            main[0xc4].cycles,
+            Some(CycleCount::Conditional {
+                not_taken: 6,
+                taken: 16,
+            })
+        );
+        assert_eq!(cb[0x00].cycles, Some(CycleCount::Fixed(7)));
+        assert_eq!(cb[0x46].cycles, Some(CycleCount::Fixed(9)));
+        assert_eq!(dd[0x34].cycles, Some(CycleCount::Fixed(18)));
+        assert_eq!(dd[0xe3].cycles, Some(CycleCount::Fixed(19)));
+        assert_eq!(ed[0x4c].cycles, Some(CycleCount::Fixed(17)));
+        assert_eq!(
+            ed[0x4d].cycles,
+            Some(CycleCount::Variant {
+                z80180: 22,
+                z8s180: 12,
+            })
+        );
+        assert_eq!(
+            ed[0xb0].cycles,
+            Some(CycleCount::Repeat {
+                terminal: 12,
+                repeating: 14,
+            })
+        );
+    }
+
+    #[test]
+    fn timing_resolution_selects_the_executed_path() {
+        let conditional = CycleCount::Conditional {
+            not_taken: 6,
+            taken: 16,
+        };
+        assert_eq!(conditional.resolve(Variant::Z80180, false, 0, true), 6);
+        assert_eq!(conditional.resolve(Variant::Z80180, true, 0, true), 16);
+
+        let repeat = CycleCount::Repeat {
+            terminal: 12,
+            repeating: 14,
+        };
+        assert_eq!(repeat.resolve(Variant::Z80180, false, 0, true), 12);
+        assert_eq!(repeat.resolve(Variant::Z80180, false, 1, false), 14);
+        assert_eq!(repeat.resolve(Variant::Z80180, false, 2, true), 40);
+
+        let variant = CycleCount::Variant {
+            z80180: 22,
+            z8s180: 12,
+        };
+        assert_eq!(variant.resolve(Variant::Z80180, false, 0, true), 22);
+        assert_eq!(variant.resolve(Variant::Z8S180, false, 0, true), 12);
+    }
+
+    #[test]
+    fn interrupt_acknowledge_cycles_match_um0050_figures() {
+        assert_eq!(NMI_ACKNOWLEDGE_CYCLES, 11);
+        assert_eq!(INT0_MODE0_RST_CYCLES, 13);
+        assert_eq!(INT0_MODE1_ACKNOWLEDGE_CYCLES, 11);
+        assert_eq!(VECTORED_ACKNOWLEDGE_CYCLES, 18);
+        assert_eq!(HALT_IDLE_CYCLES, 3);
+        assert_eq!(SECOND_OPCODE_TRAP_CYCLES, 17);
+        assert_eq!(THIRD_OPCODE_TRAP_CYCLES, 23);
     }
 }
