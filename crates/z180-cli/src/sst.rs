@@ -1,7 +1,10 @@
 mod policy;
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -33,6 +36,10 @@ pub(crate) struct SstArgs {
     /// Deliberately reverse LD r,r' operands to prove the harness detects errors.
     #[arg(long, hide = true)]
     sabotage_ld: bool,
+
+    /// Print case counts per opcode file and special generated family.
+    #[arg(long)]
+    census: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -42,12 +49,57 @@ enum ReportFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum CaseKind {
+    Instruction,
+    Trap,
+    Mmu,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum PortDirection {
+    R,
+    W,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct PortEvent(u16, u8, PortDirection);
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MmuProbe {
+    logical: u16,
+    expected_physical: u32,
+    value: u8,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Z180State {
+    itc: u8,
+    cbr: u8,
+    bbr: u8,
+    cbar: u8,
+    sleeping: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct TestCase {
     name: String,
+    kind: Option<CaseKind>,
+    seed: Option<u64>,
+    flags_mask: Option<u8>,
+    disputed: Option<bool>,
+    dispute_note: Option<String>,
+    ports: Option<Vec<PortEvent>>,
+    mmu_probes: Option<Vec<MmuProbe>>,
     initial: TestState,
     #[serde(rename = "final")]
     final_state: TestState,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +130,9 @@ struct TestState {
     iff2: u8,
     im: u8,
     ram: Vec<[u16; 2]>,
+    z180: Option<Z180State>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,6 +142,7 @@ struct RunReport {
     pass: usize,
     fail: usize,
     unimplemented: usize,
+    census: Vec<CensusEntry>,
 }
 
 impl RunReport {
@@ -97,6 +153,7 @@ impl RunReport {
             pass: 0,
             fail: 0,
             unimplemented: 0,
+            census: Vec::new(),
         }
     }
 
@@ -131,21 +188,49 @@ struct ExcludedFile {
     reason: String,
 }
 
-#[derive(Default)]
-struct NullBus;
+#[derive(Debug, Serialize)]
+struct CensusEntry {
+    family: String,
+    cases: usize,
+}
 
-impl HostBus for NullBus {
+#[derive(Default)]
+struct PortScript {
+    expected: Vec<PortEvent>,
+    observed: Vec<PortEvent>,
+}
+
+#[derive(Clone, Default)]
+struct ScriptedBus {
+    script: Rc<RefCell<PortScript>>,
+}
+
+impl HostBus for ScriptedBus {
     fn mem_read(&mut self, _phys: u32) -> u8 {
         0xff
     }
 
     fn mem_write(&mut self, _phys: u32, _value: u8) {}
 
-    fn io_read(&mut self, _port: u16) -> u8 {
-        0xff
+    fn io_read(&mut self, port: u16) -> u8 {
+        let mut script = self.script.borrow_mut();
+        let value = script
+            .expected
+            .get(script.observed.len())
+            .filter(|event| event.0 == port && event.2 == PortDirection::R)
+            .map_or(0xff, |event| event.1);
+        script
+            .observed
+            .push(PortEvent(port, value, PortDirection::R));
+        value
     }
 
-    fn io_write(&mut self, _port: u16, _value: u8) {}
+    fn io_write(&mut self, port: u16, value: u8) {
+        self.script
+            .borrow_mut()
+            .observed
+            .push(PortEvent(port, value, PortDirection::W));
+    }
 }
 
 pub(crate) fn run(args: SstArgs) -> Result<()> {
@@ -161,6 +246,26 @@ pub(crate) fn run(args: SstArgs) -> Result<()> {
         }
         selected_files += 1;
 
+        let cases = load_cases(&path)?;
+        let generated_kind = validate_generated_cases(&stem, &cases)?;
+        if args.census {
+            report.census.push(CensusEntry {
+                family: stem.clone(),
+                cases: cases.len(),
+            });
+        }
+
+        if generated_kind.is_some() {
+            report.push(FileReport {
+                file: stem,
+                pass: 0,
+                fail: 0,
+                unimplemented: cases.len(),
+                failures: Vec::new(),
+            });
+            continue;
+        }
+
         let opcodes = opcode_bytes(&stem)?;
         if let Some(reason) = undefined_reason(&opcodes) {
             report.excluded.push(ExcludedFile {
@@ -170,7 +275,6 @@ pub(crate) fn run(args: SstArgs) -> Result<()> {
             continue;
         }
 
-        let cases = load_cases(&path)?;
         if !implemented(&opcodes) {
             report.push(FileReport {
                 file: stem,
@@ -233,6 +337,134 @@ fn load_cases(path: &Path) -> Result<Vec<TestCase>> {
         .with_context(|| format!("failed to parse SST file {}", path.display()))
 }
 
+fn validate_generated_cases(stem: &str, cases: &[TestCase]) -> Result<Option<CaseKind>> {
+    let Some(first) = cases.first() else {
+        return Ok(None);
+    };
+    let Some(kind) = first.kind else {
+        if cases.iter().any(|case| case.kind.is_some()) {
+            bail!("{stem} mixes standard and generated SST cases");
+        }
+        return Ok(None);
+    };
+
+    match kind {
+        CaseKind::Instruction => {
+            if stem.len() != 4
+                || !stem.starts_with("ed")
+                || u8::from_str_radix(&stem[2..], 16).is_err()
+            {
+                bail!("generated instruction family has invalid filename {stem:?}");
+            }
+        }
+        CaseKind::Trap if stem != "trap" => {
+            bail!("generated TRAP cases must be in trap.json, not {stem}.json");
+        }
+        CaseKind::Mmu if stem != "mmu" => {
+            bail!("generated MMU cases must be in mmu.json, not {stem}.json");
+        }
+        CaseKind::Trap | CaseKind::Mmu => {}
+    }
+
+    for (index, case) in cases.iter().enumerate() {
+        validate_generated_case(stem, index, kind, case)?;
+    }
+    Ok(Some(kind))
+}
+
+fn validate_generated_case(
+    stem: &str,
+    index: usize,
+    kind: CaseKind,
+    case: &TestCase,
+) -> Result<()> {
+    let location = format!("{stem}.json[{index}]");
+    if case.kind != Some(kind) {
+        bail!("{location} has inconsistent case kind");
+    }
+    if case.name.is_empty() {
+        bail!("{location}.name is empty");
+    }
+    if case.seed.is_none() {
+        bail!("{location}.seed is missing");
+    }
+    let Some(mask) = case.flags_mask else {
+        bail!("{location}.flags_mask is missing");
+    };
+    if mask & 0x28 != 0 {
+        bail!("{location}.flags_mask includes undocumented flag bits");
+    }
+    let Some(disputed) = case.disputed else {
+        bail!("{location}.disputed is missing");
+    };
+    let Some(note) = &case.dispute_note else {
+        bail!("{location}.dispute_note is missing");
+    };
+    if disputed && note.is_empty() {
+        bail!("{location} is disputed without a note");
+    }
+    if case.ports.is_none() {
+        bail!("{location}.ports is missing");
+    }
+    if !case.extra.is_empty() {
+        bail!("{location} has unknown top-level fields");
+    }
+
+    validate_generated_state(&location, "initial", &case.initial)?;
+    validate_generated_state(&location, "final", &case.final_state)?;
+
+    match (kind, &case.mmu_probes) {
+        (CaseKind::Mmu, Some(probes)) => validate_mmu_probes(&location, probes)?,
+        (CaseKind::Mmu, None) => bail!("{location}.mmu_probes is missing"),
+        (_, Some(_)) => bail!("{location} has MMU probes outside the MMU family"),
+        (_, None) => {}
+    }
+    Ok(())
+}
+
+fn validate_generated_state(location: &str, side: &str, state: &TestState) -> Result<()> {
+    if state.iff1 > 1 || state.iff2 > 1 {
+        bail!("{location}.{side} has a non-boolean IFF value");
+    }
+    if state.im > 2 {
+        bail!("{location}.{side}.im is invalid");
+    }
+    let Some(z180) = &state.z180 else {
+        bail!("{location}.{side}.z180 is missing");
+    };
+    let _ = (z180.itc, z180.cbr, z180.bbr, z180.cbar, z180.sleeping);
+    if !state.extra.is_empty() {
+        bail!("{location}.{side} has unknown state fields");
+    }
+    let mut previous = None;
+    for [address, value] in &state.ram {
+        if *value > 0xff {
+            bail!("{location}.{side}.ram value at {address:04x} exceeds one byte");
+        }
+        if previous.is_some_and(|previous| previous >= *address) {
+            bail!("{location}.{side}.ram is not sorted with unique addresses");
+        }
+        previous = Some(*address);
+    }
+    Ok(())
+}
+
+fn validate_mmu_probes(location: &str, probes: &[MmuProbe]) -> Result<()> {
+    if probes.len() != 16 {
+        bail!("{location}.mmu_probes must contain all 16 logical pages");
+    }
+    for (page, probe) in probes.iter().enumerate() {
+        if usize::from(probe.logical >> 12) != page {
+            bail!("{location}.mmu_probes[{page}] does not probe logical page {page}");
+        }
+        if probe.expected_physical > 0x0f_ffff {
+            bail!("{location}.mmu_probes[{page}].expected_physical exceeds 20 bits");
+        }
+        let _ = probe.value;
+    }
+    Ok(())
+}
+
 fn implemented(opcodes: &[u8]) -> bool {
     matches!(opcodes, [opcode] if is_opcode_implemented(*opcode))
 }
@@ -252,7 +484,8 @@ fn run_file(
     };
 
     for case in cases {
-        let mut cpu = machine()?;
+        let expected_ports = case.ports.clone().unwrap_or_default();
+        let (mut cpu, port_script) = machine(expected_ports)?;
         load_state(&mut cpu, &case.initial)
             .with_context(|| format!("failed to load initial state for {}", case.name))?;
         let sabotage = sabotage_ld.then(|| inject_reversed_ld(&mut cpu)).flatten();
@@ -265,7 +498,9 @@ fn run_file(
             continue;
         }
 
-        if let Some(failure) = compare(&cpu, &case, ignore_r) {
+        let failure = compare(&cpu, &case, ignore_r)
+            .or_else(|| compare_ports(&port_script.borrow(), &case.name));
+        if let Some(failure) = failure {
             file_report.fail += 1;
             file_report.failures.push(failure);
         } else {
@@ -283,14 +518,14 @@ struct LdSabotage {
 }
 
 impl LdSabotage {
-    fn restore_fetch_byte(self, cpu: &mut Z180<NullBus>) {
+    fn restore_fetch_byte(self, cpu: &mut Z180<ScriptedBus>) {
         if !self.writes_fetch_byte {
             cpu.mem_poke(u32::from(self.address), self.opcode);
         }
     }
 }
 
-fn inject_reversed_ld(cpu: &mut Z180<NullBus>) -> Option<LdSabotage> {
+fn inject_reversed_ld(cpu: &mut Z180<ScriptedBus>) -> Option<LdSabotage> {
     let address = cpu.reg(Reg::PC);
     let opcode = cpu.mem_peek(u32::from(address));
     let reversed = reversed_ld_opcode(opcode)?;
@@ -309,7 +544,7 @@ fn reversed_ld_opcode(opcode: u8) -> Option<u8> {
         .then_some(0x40 | ((opcode & 0x07) << 3) | ((opcode >> 3) & 0x07))
 }
 
-fn machine() -> Result<Z180<NullBus>> {
+fn machine(expected_ports: Vec<PortEvent>) -> Result<(Z180<ScriptedBus>, Rc<RefCell<PortScript>>)> {
     let config = MachineConfig {
         regions: vec![RegionDef {
             base: 0,
@@ -318,10 +553,18 @@ fn machine() -> Result<Z180<NullBus>> {
         }],
         ..MachineConfig::default()
     };
-    Z180::new(config, NullBus).context("flat 64K SST machine configuration is invalid")
+    let script = Rc::new(RefCell::new(PortScript {
+        expected: expected_ports,
+        observed: Vec::new(),
+    }));
+    let bus = ScriptedBus {
+        script: Rc::clone(&script),
+    };
+    let cpu = Z180::new(config, bus).context("flat 64K SST machine configuration is invalid")?;
+    Ok((cpu, script))
 }
 
-fn load_state(cpu: &mut Z180<NullBus>, state: &TestState) -> Result<()> {
+fn load_state(cpu: &mut Z180<ScriptedBus>, state: &TestState) -> Result<()> {
     for [address, value] in &state.ram {
         let value = u8::try_from(*value)
             .with_context(|| format!("RAM value {value} at {address:04x} exceeds one byte"))?;
@@ -347,8 +590,9 @@ fn load_state(cpu: &mut Z180<NullBus>, state: &TestState) -> Result<()> {
     Ok(())
 }
 
-fn compare(cpu: &Z180<NullBus>, case: &TestCase, ignore_r: bool) -> Option<Failure> {
+fn compare(cpu: &Z180<ScriptedBus>, case: &TestCase, ignore_r: bool) -> Option<Failure> {
     let expected = &case.final_state;
+    let flag_mask = case.flags_mask.unwrap_or(FLAG_COMPARE_MASK);
     let [a, f] = cpu.reg(Reg::AF).to_be_bytes();
     let [b, c] = cpu.reg(Reg::BC).to_be_bytes();
     let [d, e] = cpu.reg(Reg::DE).to_be_bytes();
@@ -363,7 +607,7 @@ fn compare(cpu: &Z180<NullBus>, case: &TestCase, ignore_r: bool) -> Option<Failu
         difference_u8("c", expected.c, c),
         difference_u8("d", expected.d, d),
         difference_u8("e", expected.e, e),
-        difference_u8("f", expected.f & FLAG_COMPARE_MASK, f & FLAG_COMPARE_MASK),
+        difference_u8("f", expected.f & flag_mask, f & flag_mask),
         difference_u8("h", expected.h, h),
         difference_u8("l", expected.l, l),
         difference_u8("i", expected.i, i),
@@ -407,6 +651,38 @@ fn compare(cpu: &Z180<NullBus>, case: &TestCase, ignore_r: bool) -> Option<Failu
     }
 
     None
+}
+
+fn compare_ports(script: &PortScript, test: &str) -> Option<Failure> {
+    if script.expected == script.observed {
+        return None;
+    }
+    let index = script
+        .expected
+        .iter()
+        .zip(&script.observed)
+        .position(|(expected, observed)| expected != observed)
+        .unwrap_or_else(|| script.expected.len().min(script.observed.len()));
+    Some(Failure {
+        test: test.to_owned(),
+        field: format!("ports[{index}]"),
+        expected: script
+            .expected
+            .get(index)
+            .map_or_else(|| "<end>".to_owned(), format_port_event),
+        actual: script
+            .observed
+            .get(index)
+            .map_or_else(|| "<end>".to_owned(), format_port_event),
+    })
+}
+
+fn format_port_event(event: &PortEvent) -> String {
+    let direction = match event.2 {
+        PortDirection::R => 'r',
+        PortDirection::W => 'w',
+    };
+    format!("{:04x}:{:02x}:{direction}", event.0, event.1)
 }
 
 struct Difference {
@@ -462,6 +738,15 @@ fn print_text(report: &RunReport) {
             );
         }
     }
+    if !report.census.is_empty() {
+        for entry in &report.census {
+            println!("CENSUS {}={}", entry.family, entry.cases);
+        }
+        println!(
+            "CENSUS total={}",
+            report.census.iter().map(|entry| entry.cases).sum::<usize>()
+        );
+    }
     println!(
         "SUMMARY pass={} fail={} unimplemented={} excluded={}",
         report.pass,
@@ -477,41 +762,49 @@ mod tests {
 
     #[test]
     fn comparison_masks_xy_flags_and_r_high_bit() {
-        let mut cpu = machine().expect("valid test machine");
+        let (mut cpu, _) = machine(Vec::new()).expect("valid test machine");
         cpu.set_reg(Reg::AF, pair(0x12, 0x28));
         cpu.set_reg(Reg::AF2, pair(0x34, 0x28));
         cpu.set_reg(Reg::IR, pair(0x56, 0x80));
-        let case = TestCase {
-            name: "masked fields".to_owned(),
-            initial: zero_state(),
-            final_state: TestState {
+        let case = standard_case(
+            "masked fields",
+            TestState {
                 a: 0x12,
                 af2: pair(0x34, 0x00),
                 i: 0x56,
                 ..zero_state()
             },
-        };
+        );
 
         assert!(compare(&cpu, &case, false).is_none());
     }
 
     #[test]
     fn comparison_reports_the_first_differing_field() {
-        let cpu = machine().expect("valid test machine");
-        let case = TestCase {
-            name: "wrong pc and sp".to_owned(),
-            initial: zero_state(),
-            final_state: TestState {
+        let (cpu, _) = machine(Vec::new()).expect("valid test machine");
+        let case = standard_case(
+            "wrong pc and sp",
+            TestState {
                 pc: 1,
                 sp: 2,
                 ..zero_state()
             },
-        };
+        );
 
         let failure = compare(&cpu, &case, false).expect("comparison must fail");
         assert_eq!(failure.field, "pc");
         assert_eq!(failure.expected, "0001");
         assert_eq!(failure.actual, "0000");
+    }
+
+    #[test]
+    fn comparison_uses_the_generated_case_flag_mask() {
+        let (mut cpu, _) = machine(Vec::new()).expect("valid test machine");
+        cpu.set_reg(Reg::AF, pair(0, 0x80));
+        let mut case = standard_case("masked documented flags", zero_state());
+        case.flags_mask = Some(0x42);
+
+        assert!(compare(&cpu, &case, false).is_none());
     }
 
     #[test]
@@ -521,6 +814,92 @@ mod tests {
         assert_eq!(reversed_ld_opcode(0x40), Some(0x40));
         assert_eq!(reversed_ld_opcode(0x76), None);
         assert_eq!(reversed_ld_opcode(0x00), None);
+    }
+
+    #[test]
+    fn scripted_bus_supplies_reads_and_records_writes_in_order() {
+        let expected = vec![
+            PortEvent(0x0040, 0x12, PortDirection::R),
+            PortEvent(0x0041, 0x34, PortDirection::W),
+        ];
+        let script = Rc::new(RefCell::new(PortScript {
+            expected,
+            observed: Vec::new(),
+        }));
+        let mut bus = ScriptedBus {
+            script: Rc::clone(&script),
+        };
+
+        assert_eq!(bus.io_read(0x0040), 0x12);
+        bus.io_write(0x0041, 0x34);
+        assert!(compare_ports(&script.borrow(), "ports").is_none());
+    }
+
+    #[test]
+    fn generated_schema_dispatches_instruction_and_validates_mmu_pages() {
+        let instruction = generated_case(CaseKind::Instruction, None);
+        assert_eq!(
+            validate_generated_cases("ed00", &[instruction]).expect("valid instruction schema"),
+            Some(CaseKind::Instruction)
+        );
+
+        let probes = (0_u16..16)
+            .map(|page| MmuProbe {
+                logical: page << 12,
+                expected_physical: u32::from(page) << 12,
+                value: page as u8,
+            })
+            .collect();
+        let mmu = generated_case(CaseKind::Mmu, Some(probes));
+        assert_eq!(
+            validate_generated_cases("mmu", &[mmu]).expect("valid MMU schema"),
+            Some(CaseKind::Mmu)
+        );
+    }
+
+    fn standard_case(name: &str, final_state: TestState) -> TestCase {
+        TestCase {
+            name: name.to_owned(),
+            kind: None,
+            seed: None,
+            flags_mask: None,
+            disputed: None,
+            dispute_note: None,
+            ports: None,
+            mmu_probes: None,
+            initial: zero_state(),
+            final_state,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn generated_case(kind: CaseKind, mmu_probes: Option<Vec<MmuProbe>>) -> TestCase {
+        TestCase {
+            name: "generated".to_owned(),
+            kind: Some(kind),
+            seed: Some(1),
+            flags_mask: Some(0xd7),
+            disputed: Some(false),
+            dispute_note: Some(String::new()),
+            ports: Some(Vec::new()),
+            mmu_probes,
+            initial: generated_state(),
+            final_state: generated_state(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn generated_state() -> TestState {
+        TestState {
+            z180: Some(Z180State {
+                itc: 1,
+                cbr: 0,
+                bbr: 0,
+                cbar: 0xf0,
+                sleeping: false,
+            }),
+            ..zero_state()
+        }
     }
 
     fn zero_state() -> TestState {
@@ -547,6 +926,8 @@ mod tests {
             iff2: 0,
             im: 0,
             ram: Vec::new(),
+            z180: None,
+            extra: BTreeMap::new(),
         }
     }
 }

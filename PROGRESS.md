@@ -237,6 +237,59 @@ compares ITC/SLP through their owning public interfaces. Phase 5 activates MMU
 cases by programming CBR/BBR/CBAR through the real internal-I/O instruction
 path. No privileged SST-only setter or adapter is authorized.
 
+### P1.7 — z180-sst runner dispatch and census (2026-07-20)
+
+The shared SST runner now deserializes and validates every Appendix C field:
+generated metadata, complete base/Z180 initial and final states, canonical RAM,
+typed port events, and 16 ordered 20-bit MMU probes. It dispatches all three
+generated case kinds to Phase 1 UNIMPLEMENTED reports without injecting or
+comparing Z180 control state. Its local scripted `HostBus` supplies ordered
+read values, records all reads/writes, and reports the first event mismatch
+when a case executes. F comparison uses each generated case's `flags_mask`.
+`--census` emits every opcode/special-family count and an aggregate total.
+
+Exact generated-corpus command:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst --census
+UNIMPLEMENTED ed00: pass=0 fail=0 unimplemented=200
+... 32 additional ED opcode families, each unimplemented=200 ...
+UNIMPLEMENTED ed9b: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED mmu: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED trap: pass=0 fail=0 unimplemented=50
+CENSUS ed00=200
+... 32 additional ED opcode families, each cases=200 ...
+CENSUS ed9b=200
+CENSUS mmu=200
+CENSUS trap=50
+CENSUS total=7050
+SUMMARY pass=0 fail=0 unimplemented=7050 excluded=0
+```
+
+The shared standard path was rerun with the first G1 command and remained
+exact: all 65 selected opcode files reported 1,000 PASS each, with
+`SUMMARY pass=65000 fail=0 unimplemented=0 excluded=0`.
+
+Final quality authority:
+
+```text
+> cargo test --workspace
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+running 8 tests
+test result: ok. 8 passed; 0 failed; 0 ignored
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.52s
+
+> cargo fmt --all --check
+```
+
+The format check completed successfully with no output. Unit regressions cover
+generated instruction/MMU schema dispatch, all-page MMU validation, scripted
+read/write ordering, first-difference reporting, and per-case flag masks.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
