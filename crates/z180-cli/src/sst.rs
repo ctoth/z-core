@@ -29,6 +29,10 @@ pub(crate) struct SstArgs {
     /// Ignore R only when diagnosing disputed M1 accounting; gates never use this.
     #[arg(long)]
     ignore_r: bool,
+
+    /// Deliberately reverse LD r,r' operands to prove the harness detects errors.
+    #[arg(long, hide = true)]
+    sabotage_ld: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -178,7 +182,7 @@ pub(crate) fn run(args: SstArgs) -> Result<()> {
             continue;
         }
 
-        report.push(run_file(stem, cases, args.ignore_r)?);
+        report.push(run_file(stem, cases, args.ignore_r, args.sabotage_ld)?);
     }
 
     if selected_files == 0 {
@@ -233,7 +237,12 @@ fn implemented(opcodes: &[u8]) -> bool {
     matches!(opcodes, [opcode] if is_opcode_implemented(*opcode))
 }
 
-fn run_file(file: String, cases: Vec<TestCase>, ignore_r: bool) -> Result<FileReport> {
+fn run_file(
+    file: String,
+    cases: Vec<TestCase>,
+    ignore_r: bool,
+    sabotage_ld: bool,
+) -> Result<FileReport> {
     let mut file_report = FileReport {
         file,
         pass: 0,
@@ -246,7 +255,11 @@ fn run_file(file: String, cases: Vec<TestCase>, ignore_r: bool) -> Result<FileRe
         let mut cpu = machine()?;
         load_state(&mut cpu, &case.initial)
             .with_context(|| format!("failed to load initial state for {}", case.name))?;
+        let sabotage = sabotage_ld.then(|| inject_reversed_ld(&mut cpu)).flatten();
         let cycles = cpu.step();
+        if let Some(sabotage) = sabotage {
+            sabotage.restore_fetch_byte(&mut cpu);
+        }
         if cycles == 0 {
             file_report.unimplemented += 1;
             continue;
@@ -261,6 +274,39 @@ fn run_file(file: String, cases: Vec<TestCase>, ignore_r: bool) -> Result<FileRe
     }
 
     Ok(file_report)
+}
+
+struct LdSabotage {
+    address: u16,
+    opcode: u8,
+    writes_fetch_byte: bool,
+}
+
+impl LdSabotage {
+    fn restore_fetch_byte(self, cpu: &mut Z180<NullBus>) {
+        if !self.writes_fetch_byte {
+            cpu.mem_poke(u32::from(self.address), self.opcode);
+        }
+    }
+}
+
+fn inject_reversed_ld(cpu: &mut Z180<NullBus>) -> Option<LdSabotage> {
+    let address = cpu.reg(Reg::PC);
+    let opcode = cpu.mem_peek(u32::from(address));
+    let reversed = reversed_ld_opcode(opcode)?;
+    let destination = (reversed >> 3) & 0x07;
+    let writes_fetch_byte = destination == 0x06 && cpu.reg(Reg::HL) == address;
+    cpu.mem_poke(u32::from(address), reversed);
+    Some(LdSabotage {
+        address,
+        opcode,
+        writes_fetch_byte,
+    })
+}
+
+fn reversed_ld_opcode(opcode: u8) -> Option<u8> {
+    ((0x40..=0x7f).contains(&opcode) && opcode != 0x76)
+        .then_some(0x40 | ((opcode & 0x07) << 3) | ((opcode >> 3) & 0x07))
 }
 
 fn machine() -> Result<Z180<NullBus>> {
@@ -466,6 +512,15 @@ mod tests {
         assert_eq!(failure.field, "pc");
         assert_eq!(failure.expected, "0001");
         assert_eq!(failure.actual, "0000");
+    }
+
+    #[test]
+    fn sabotage_reverses_only_ld_operands() {
+        assert_eq!(reversed_ld_opcode(0x41), Some(0x48));
+        assert_eq!(reversed_ld_opcode(0x70), Some(0x46));
+        assert_eq!(reversed_ld_opcode(0x40), Some(0x40));
+        assert_eq!(reversed_ld_opcode(0x76), None);
+        assert_eq!(reversed_ld_opcode(0x00), None);
     }
 
     fn zero_state() -> TestState {
