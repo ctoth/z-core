@@ -9,7 +9,7 @@ use std::rc::Rc;
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use z180_core::{HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180, is_opcode_implemented};
+use z180_core::{HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180};
 
 use policy::{OnlyFilter, opcode_bytes, undefined_reason};
 
@@ -466,7 +466,7 @@ fn validate_mmu_probes(location: &str, probes: &[MmuProbe]) -> Result<()> {
 }
 
 fn implemented(opcodes: &[u8]) -> bool {
-    matches!(opcodes, [opcode] if is_opcode_implemented(*opcode))
+    matches!(opcodes, [opcode] if Z180::<ScriptedBus>::is_opcode_implemented(*opcode))
 }
 
 fn run_file(

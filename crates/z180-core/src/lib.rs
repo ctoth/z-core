@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod memory;
+mod optable;
 mod registers;
 
 pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
@@ -63,22 +64,22 @@ impl<B: HostBus> Z180<B> {
         let pc = self.registers.get(Reg::PC);
         self.instruction_pc = pc;
         let opcode = self.read_logical(pc);
-        if !is_opcode_implemented(opcode) {
+        let descriptor = Self::MAIN_OPCODES[usize::from(opcode)];
+        let Some(handler) = descriptor.handler else {
             return 0;
+        };
+        debug_assert!(!descriptor.mnemonic.is_empty());
+        debug_assert!(descriptor.length != 0);
+        for _ in 0..descriptor.length {
+            self.registers.increment_pc();
         }
-        self.registers.increment_pc();
         self.registers.increment_r();
 
-        match opcode {
-            0x00 => {}
-            0x76 => self.halted = true,
-            0x40..=0x7f => self.execute_ld_block(opcode),
-            _ => return 0,
-        }
+        handler(self, opcode);
 
         // Phase 1 deliberately has no timing model. This non-hardware unit lets
         // the execution skeleton make progress until UM0050 timings land in P4.
-        self.finish_step(1)
+        self.finish_step(descriptor.cycles.map_or(1, u32::from))
     }
 
     pub fn run(&mut self, cycles: u32) -> u32 {
@@ -145,7 +146,17 @@ impl<B: HostBus> Z180<B> {
         self.memory.poke(&mut self.bus, phys, value);
     }
 
-    fn execute_ld_block(&mut self, opcode: u8) {
+    pub fn is_opcode_implemented(opcode: u8) -> bool {
+        Self::MAIN_OPCODES[usize::from(opcode)].handler.is_some()
+    }
+
+    pub(crate) fn execute_nop(&mut self, _opcode: u8) {}
+
+    pub(crate) fn execute_halt(&mut self, _opcode: u8) {
+        self.halted = true;
+    }
+
+    pub(crate) fn execute_ld_block(&mut self, opcode: u8) {
         let destination = (opcode >> 3) & 0x07;
         let source = opcode & 0x07;
         let value = if source == 6 {
@@ -178,10 +189,6 @@ impl<B: HostBus> Z180<B> {
         self.cycle_count = self.cycle_count.saturating_add(u64::from(cycles));
         cycles
     }
-}
-
-pub const fn is_opcode_implemented(opcode: u8) -> bool {
-    opcode == 0x00 || (opcode >= 0x40 && opcode <= 0x7f)
 }
 
 #[cfg(test)]
@@ -224,7 +231,7 @@ mod tests {
         for opcode in 0_u8..=u8::MAX {
             let expected = opcode == 0x00 || (0x40..=0x7f).contains(&opcode);
             assert_eq!(
-                is_opcode_implemented(opcode),
+                Z180::<NullBus>::is_opcode_implemented(opcode),
                 expected,
                 "opcode {opcode:02x}"
             );

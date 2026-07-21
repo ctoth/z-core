@@ -521,6 +521,51 @@ beyond the authorized stub subset was added.
 
 ## Phase 2 — Full unprefixed opcode page
 
+### P2.1 — Main-page optable migration (2026-07-20)
+
+`crates/z180-core/src/optable.rs` now owns the 256-entry main opcode table.
+Each descriptor carries its mnemonic template, operand kinds, byte length,
+optional verified cycle count, and a monomorphized handler function pointer.
+Cycle entries deliberately remain `None` until Phase 4 verifies and
+transcribes UM0050 timing; the existing non-hardware progress unit remains the
+temporary runtime fallback. Operand metadata is retained for the planned
+table-driven disassembler/docs consumers rather than read artificially on the
+hot path.
+
+Only the already-authorized Phase 1 stub entries are populated: NOP, HALT,
+and the `40h`–`7Fh` LD matrix with `76h` correctly owned by HALT. `step()` now
+gets implementation status, byte length, provisional timing state, and
+dispatch from this table. The duplicated free implementation-policy match was
+removed; the CLI's query is table-backed. No new opcode behavior was added.
+
+Table-driven dispatch preserved the exact SST authority:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 00,76,40..7f
+PASS 00: pass=1000 fail=0 unimplemented=0
+PASS 40..7f: 64 files, each pass=1000 fail=0 unimplemented=0
+SUMMARY pass=65000 fail=0 unimplemented=0 excluded=0
+```
+
+Final quality authority:
+
+```text
+> cargo test --workspace
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+running 10 tests
+test result: ok. 10 passed; 0 failed; 0 ignored
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.62s
+
+> cargo fmt --all --check
+```
+
+The format check completed successfully with no output. Optable regressions
+prove the exact populated set and the NOP/HALT/LD metadata.
+
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
 
 ## Phase 4 — Timing and ZEXDOC
