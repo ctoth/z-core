@@ -425,9 +425,8 @@ single-source-of-truth discipline as the optable).
 - External pins: /INT0 (honors IM0/IM1/IM2), /INT1, /INT2 (always vectored),
   /NMI. Edge/level behavior per UM — verify.
 - Internal sources: PRT0, PRT1, DMA0, DMA1, CSI/O, ASCI0, ASCI1.
-- Priority (highest first), believed: TRAP, NMI, INT0, INT1, INT2, PRT0,
-  DMA0, PRT1, DMA1, CSI/O, ASCI0, ASCI1 — VERIFY against the UM's priority
-  table; do not trust this list.
+- Priority (highest first): TRAP, NMI, INT0, INT1, INT2, PRT0, PRT1, DMA0,
+  DMA1, CSI/O, ASCI0, ASCI1 (UM0050 Figure 31 and Table 9).
 - INT1/INT2/internal vectors: high byte = I register; low byte = IL's
   programmable bits | fixed per-source offset. Believed offsets: INT1=0x00,
   INT2=0x02, PRT0=0x04, PRT1=0x06, DMA0=0x08, DMA1=0x0A, CSI/O=0x0C,

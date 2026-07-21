@@ -14,10 +14,13 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use ioregs::{
-    BBR, CBAR, CBR, DCNTL, ICR, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, ReadEffect, WriteEffect,
+    BBR, CBAR, CBR, DCNTL, ICR, IL, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, ReadEffect, WriteEffect,
 };
 use memory::Memory;
-use optable::{HALT_IDLE_CYCLES, SECOND_OPCODE_TRAP_CYCLES, THIRD_OPCODE_TRAP_CYCLES};
+use optable::{
+    HALT_IDLE_CYCLES, INT0_MODE0_RST_CYCLES, INT0_MODE1_ACKNOWLEDGE_CYCLES, NMI_ACKNOWLEDGE_CYCLES,
+    SECOND_OPCODE_TRAP_CYCLES, THIRD_OPCODE_TRAP_CYCLES, VECTORED_ACKNOWLEDGE_CYCLES,
+};
 use registers::Registers;
 
 const FLAG_S: u8 = 0x80;
@@ -34,6 +37,28 @@ pub trait HostBus {
     fn mem_write(&mut self, phys: u32, value: u8);
     fn io_read(&mut self, port: u16) -> u8;
     fn io_write(&mut self, port: u16, value: u8);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IrqLine {
+    Int0,
+    Int1,
+    Int2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IrqSource {
+    Nmi,
+    Int0,
+    Int1,
+    Int2,
+    Prt0,
+    Prt1,
+    Dma0,
+    Dma1,
+    Csio,
+    Asci0,
+    Asci1,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +90,12 @@ pub struct Z180<B: HostBus> {
     iff2: bool,
     ei_shadow: bool,
     interrupt_mode: u8,
+    irq_lines: [bool; 3],
+    nmi_level: bool,
+    nmi_pending: bool,
+    // Phase 6 peripherals set these bits only after their own enable and
+    // request conditions are satisfied; this controller owns priority only.
+    internal_irq_pending: u8,
     events: Vec<Event>,
 }
 
@@ -95,6 +126,10 @@ impl<B: HostBus> Z180<B> {
             iff2: false,
             ei_shadow: false,
             interrupt_mode: 0,
+            irq_lines: [false; 3],
+            nmi_level: false,
+            nmi_pending: false,
+            internal_irq_pending: 0,
             events: Vec::new(),
         };
         cpu.recompute_mmu_pages();
@@ -122,6 +157,10 @@ impl<B: HostBus> Z180<B> {
         self.iff2 = false;
         self.ei_shadow = false;
         self.interrupt_mode = 0;
+        self.irq_lines = [false; 3];
+        self.nmi_level = false;
+        self.nmi_pending = false;
+        self.internal_irq_pending = 0;
         self.events.clear();
     }
 
@@ -216,9 +255,9 @@ impl<B: HostBus> Z180<B> {
             self.registers.increment_r();
         }
 
-        // P2.2 owns the EI shadow state. P2.3 will sample this state at the
-        // interrupt-check point; consuming it before dispatch lets a second EI
-        // establish a fresh one-instruction shadow.
+        // The interrupt-check point samples the P2.2 EI shadow before fetch;
+        // consuming it before dispatch lets a second EI establish a fresh
+        // one-instruction shadow.
         self.ei_shadow = false;
 
         handler(self, opcode);
@@ -310,6 +349,22 @@ impl<B: HostBus> Z180<B> {
         self.interrupt_mode = mode;
     }
 
+    pub fn set_irq(&mut self, line: IrqLine, level: bool) {
+        let index = match line {
+            IrqLine::Int0 => 0,
+            IrqLine::Int1 => 1,
+            IrqLine::Int2 => 2,
+        };
+        self.irq_lines[index] = level;
+    }
+
+    pub fn set_nmi(&mut self, level: bool) {
+        if level && !self.nmi_level {
+            self.nmi_pending = true;
+        }
+        self.nmi_level = level;
+    }
+
     pub fn reg(&self, reg: Reg) -> u16 {
         self.registers.get(reg)
     }
@@ -344,10 +399,127 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn interrupt_check_point(&mut self) -> Option<u32> {
-        // Phase 2 establishes the pre-fetch service boundary only. Phase 5
-        // owns interrupt pins, prioritized sources, acknowledge behavior, and
-        // HALT wake-up, so no source can fire here yet.
-        None
+        if self.nmi_pending {
+            return Some(self.take_nmi());
+        }
+
+        let source = self.pending_maskable_source()?;
+        if self.ei_shadow {
+            return None;
+        }
+        if !self.iff1 {
+            if self.sleeping {
+                self.sleeping = false;
+            }
+            return None;
+        }
+
+        Some(self.take_maskable_interrupt(source))
+    }
+
+    fn pending_maskable_source(&self) -> Option<IrqSource> {
+        if self.irq_lines[0] && self.io_regs[ITC] & 0x01 != 0 {
+            Some(IrqSource::Int0)
+        } else if self.irq_lines[1] && self.io_regs[ITC] & 0x02 != 0 {
+            Some(IrqSource::Int1)
+        } else if self.irq_lines[2] && self.io_regs[ITC] & 0x04 != 0 {
+            Some(IrqSource::Int2)
+        } else if self.internal_irq_pending & 0x01 != 0 {
+            Some(IrqSource::Prt0)
+        } else if self.internal_irq_pending & 0x02 != 0 {
+            Some(IrqSource::Prt1)
+        } else if self.internal_irq_pending & 0x04 != 0 {
+            Some(IrqSource::Dma0)
+        } else if self.internal_irq_pending & 0x08 != 0 {
+            Some(IrqSource::Dma1)
+        } else if self.internal_irq_pending & 0x10 != 0 {
+            Some(IrqSource::Csio)
+        } else if self.internal_irq_pending & 0x20 != 0 {
+            Some(IrqSource::Asci0)
+        } else if self.internal_irq_pending & 0x40 != 0 {
+            Some(IrqSource::Asci1)
+        } else {
+            None
+        }
+    }
+
+    fn take_nmi(&mut self) -> u32 {
+        self.nmi_pending = false;
+        self.halted = false;
+        self.sleeping = false;
+        self.ei_shadow = false;
+
+        let pc = self.registers.get(Reg::PC);
+        let _ = self.read_logical(pc);
+        self.registers.increment_r();
+        self.iff2 = self.iff1;
+        self.iff1 = false;
+        self.push_word(pc);
+        self.registers.set(Reg::PC, 0x0066);
+        u32::from(NMI_ACKNOWLEDGE_CYCLES)
+    }
+
+    fn take_maskable_interrupt(&mut self, source: IrqSource) -> u32 {
+        if source == IrqSource::Nmi {
+            return self.take_nmi();
+        }
+
+        self.halted = false;
+        self.sleeping = false;
+        self.ei_shadow = false;
+        self.iff1 = false;
+        self.iff2 = false;
+        self.registers.increment_r();
+
+        let pc = self.registers.get(Reg::PC);
+        self.push_word(pc);
+
+        match source {
+            IrqSource::Int0 => match self.interrupt_mode {
+                0 => {
+                    self.registers.set(Reg::PC, 0x0038);
+                    u32::from(INT0_MODE0_RST_CYCLES)
+                }
+                1 => {
+                    self.registers.set(Reg::PC, 0x0038);
+                    u32::from(INT0_MODE1_ACKNOWLEDGE_CYCLES)
+                }
+                _ => {
+                    let [i, _] = self.registers.get(Reg::IR).to_be_bytes();
+                    let restart = self.read_word(u16::from_be_bytes([i, 0xff]));
+                    self.registers.set(Reg::PC, restart);
+                    u32::from(VECTORED_ACKNOWLEDGE_CYCLES)
+                }
+            },
+            IrqSource::Int1
+            | IrqSource::Int2
+            | IrqSource::Prt0
+            | IrqSource::Prt1
+            | IrqSource::Dma0
+            | IrqSource::Dma1
+            | IrqSource::Csio
+            | IrqSource::Asci0
+            | IrqSource::Asci1 => {
+                let fixed_code = match source {
+                    IrqSource::Int1 => 0x00,
+                    IrqSource::Int2 => 0x02,
+                    IrqSource::Prt0 => 0x04,
+                    IrqSource::Prt1 => 0x06,
+                    IrqSource::Dma0 => 0x08,
+                    IrqSource::Dma1 => 0x0a,
+                    IrqSource::Csio => 0x0c,
+                    IrqSource::Asci0 => 0x0e,
+                    IrqSource::Asci1 => 0x10,
+                    IrqSource::Nmi | IrqSource::Int0 => 0,
+                };
+                let [i, _] = self.registers.get(Reg::IR).to_be_bytes();
+                let vector_low = (self.io_regs[IL] & 0xe0) | fixed_code;
+                let restart = self.read_word(u16::from_be_bytes([i, vector_low]));
+                self.registers.set(Reg::PC, restart);
+                u32::from(VECTORED_ACKNOWLEDGE_CYCLES)
+            }
+            IrqSource::Nmi => u32::from(NMI_ACKNOWLEDGE_CYCLES),
+        }
     }
 
     fn take_trap(&mut self, opcode: [u8; 3], len: u8, stacked_pc: u16, ufo: bool, m1_fetches: u8) {
@@ -2135,12 +2307,168 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_check_point_has_no_phase_two_sources() {
+    fn interrupts_ei_shadow_defers_maskable_service_for_one_instruction() {
         let mut cpu = machine();
-        cpu.ei_shadow = true;
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.mem_poke(0, 0xfb);
+        cpu.mem_poke(1, 0x00);
+        cpu.mem_poke(2, 0x00);
+        cpu.set_reg(Reg::SP, 0x8000);
+        cpu.set_irq(IrqLine::Int0, true);
 
-        assert_eq!(cpu.interrupt_check_point(), None);
+        assert_eq!(cpu.step(), 3);
         assert!(cpu.ei_shadow);
+        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.reg(Reg::PC), 2);
+        assert!(!cpu.ei_shadow);
+        assert_eq!(cpu.step(), 13);
+        assert_eq!(cpu.reg(Reg::PC), 0x0038);
+        assert_eq!(cpu.reg(Reg::SP), 0x7ffe);
+        assert_eq!(cpu.mem_peek(0x7ffe), 0x02);
+        assert_eq!(cpu.mem_peek(0x7fff), 0x00);
+    }
+
+    #[test]
+    fn interrupts_nmi_is_edge_latched_and_preserves_iff1_in_iff2() {
+        let mut cpu = machine();
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.mem_poke(0x1234, 0x00);
+        cpu.mem_poke(0x0066, 0x00);
+        cpu.set_reg(Reg::PC, 0x1234);
+        cpu.set_reg(Reg::SP, 0x8000);
+        cpu.set_reg(Reg::IR, 0x5600);
+        cpu.set_iff1(true);
+        cpu.set_iff2(false);
+
+        cpu.set_nmi(true);
+        assert_eq!(cpu.step(), 11);
+        assert_eq!(cpu.reg(Reg::PC), 0x0066);
+        assert_eq!(cpu.reg(Reg::SP), 0x7ffe);
+        assert_eq!(cpu.mem_peek(0x7ffe), 0x34);
+        assert_eq!(cpu.mem_peek(0x7fff), 0x12);
+        assert!(!cpu.iff1());
+        assert!(cpu.iff2());
+        assert_eq!(cpu.reg(Reg::IR), 0x5601);
+
+        cpu.set_nmi(true);
+        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.reg(Reg::PC), 0x0067);
+
+        cpu.set_nmi(false);
+        cpu.set_nmi(true);
+        assert_eq!(cpu.step(), 11);
+        assert_eq!(cpu.reg(Reg::PC), 0x0066);
+        assert_eq!(cpu.reg(Reg::SP), 0x7ffc);
+    }
+
+    #[test]
+    fn interrupts_int0_modes_use_fixed_ff_acknowledge_data() {
+        for (mode, expected_cycles, expected_pc) in
+            [(0, 13, 0x0038), (1, 11, 0x0038), (2, 18, 0x5678)]
+        {
+            let mut cpu = machine();
+            cpu.write_internal_io(DCNTL, 0x00);
+            cpu.mem_poke(0x12ff, 0x78);
+            cpu.mem_poke(0x1300, 0x56);
+            cpu.set_reg(Reg::PC, 0x3456);
+            cpu.set_reg(Reg::SP, 0x8000);
+            cpu.set_reg(Reg::IR, 0x1200);
+            cpu.set_interrupt_mode(mode);
+            cpu.set_iff1(true);
+            cpu.set_iff2(true);
+            cpu.set_irq(IrqLine::Int0, true);
+
+            assert_eq!(cpu.step(), expected_cycles, "IM{mode}");
+            assert_eq!(cpu.reg(Reg::PC), expected_pc, "IM{mode}");
+            assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "IM{mode}");
+            assert_eq!(cpu.mem_peek(0x7ffe), 0x56, "IM{mode}");
+            assert_eq!(cpu.mem_peek(0x7fff), 0x34, "IM{mode}");
+            assert!(!cpu.iff1(), "IM{mode}");
+            assert!(!cpu.iff2(), "IM{mode}");
+            assert_eq!(cpu.reg(Reg::IR), 0x1201, "IM{mode}");
+        }
+    }
+
+    #[test]
+    fn interrupts_vector_through_i_il_in_um0050_priority_order() {
+        let mut external = machine();
+        external.write_internal_io(DCNTL, 0x00);
+        external.write_internal_io(IL, 0xa0);
+        external.write_internal_io(ITC, 0x07);
+        external.mem_poke(0x20a0, 0x11);
+        external.mem_poke(0x20a1, 0x11);
+        external.mem_poke(0x20a2, 0x22);
+        external.mem_poke(0x20a3, 0x22);
+        external.set_reg(Reg::IR, 0x2000);
+        external.set_reg(Reg::SP, 0x8000);
+        external.set_iff1(true);
+        external.set_irq(IrqLine::Int1, true);
+        external.set_irq(IrqLine::Int2, true);
+
+        assert_eq!(external.step(), 18);
+        assert_eq!(external.reg(Reg::PC), 0x1111, "INT1 precedes INT2");
+
+        let mut internal = machine();
+        internal.write_internal_io(DCNTL, 0x00);
+        internal.write_internal_io(IL, 0xa0);
+        internal.mem_poke(0x20a6, 0x33);
+        internal.mem_poke(0x20a7, 0x33);
+        internal.mem_poke(0x20a8, 0x44);
+        internal.mem_poke(0x20a9, 0x44);
+        internal.set_reg(Reg::IR, 0x2000);
+        internal.set_reg(Reg::SP, 0x8000);
+        internal.set_iff1(true);
+        internal.internal_irq_pending = 0x02 | 0x04;
+
+        assert_eq!(internal.step(), 18);
+        assert_eq!(internal.reg(Reg::PC), 0x3333, "PRT1 precedes DMA0");
+    }
+
+    #[test]
+    fn interrupts_halt_and_sleep_follow_distinct_wake_rules() {
+        let mut halted = machine();
+        halted.write_internal_io(DCNTL, 0x00);
+        halted.mem_poke(0, 0x76);
+        halted.set_reg(Reg::SP, 0x8000);
+        halted.set_iff1(true);
+        assert_eq!(halted.step(), 3);
+        assert!(halted.halted());
+        halted.set_irq(IrqLine::Int0, true);
+        assert_eq!(halted.step(), 13);
+        assert!(!halted.halted());
+        assert_eq!(halted.reg(Reg::PC), 0x0038);
+
+        let mut sleeping = machine();
+        sleeping.write_internal_io(DCNTL, 0x00);
+        sleeping.mem_poke(0, 0xed);
+        sleeping.mem_poke(1, 0x76);
+        sleeping.mem_poke(2, 0x00);
+        assert_eq!(sleeping.step(), 8);
+        assert!(sleeping.sleeping());
+        sleeping.set_irq(IrqLine::Int1, true);
+        assert_eq!(sleeping.step(), 0, "disabled INT1 is ignored");
+        assert!(sleeping.sleeping());
+
+        sleeping.write_internal_io(ITC, 0x03);
+        assert_eq!(sleeping.step(), 3, "enabled INT1 wakes with IEF1 clear");
+        assert!(!sleeping.sleeping());
+        assert_eq!(sleeping.reg(Reg::PC), 3);
+
+        let mut serviced = machine();
+        serviced.write_internal_io(DCNTL, 0x00);
+        serviced.write_internal_io(ITC, 0x03);
+        serviced.mem_poke(0, 0xed);
+        serviced.mem_poke(1, 0x76);
+        serviced.mem_poke(0x2000, 0x56);
+        serviced.mem_poke(0x2001, 0x34);
+        serviced.set_reg(Reg::IR, 0x2000);
+        serviced.set_reg(Reg::SP, 0x8000);
+        serviced.set_iff1(true);
+        assert_eq!(serviced.step(), 8);
+        serviced.set_irq(IrqLine::Int1, true);
+        assert_eq!(serviced.step(), 18);
+        assert!(!serviced.sleeping());
+        assert_eq!(serviced.reg(Reg::PC), 0x3456);
     }
 
     fn expected_daa(accumulator: u8, flags: u8) -> (u8, u8) {

@@ -39,6 +39,21 @@ steps until it reaches or exceeds the requested budget, and returns the actual
 cycles consumed. `cycle_count()` accumulates those cycles from construction;
 `reset()` models hardware reset and does not rewind that elapsed-time clock.
 
+### Interrupt acknowledge
+
+The UM0050 base totals are 11 cycles for NMI, 13 for the fixed Mode 0 RST
+response, 11 for INT0 Mode 1, and 18 for INT0 Mode 2, INT1, INT2, and internal
+vectored responses. The automatic two acknowledge wait states shown in the UM
+figures are already part of those base totals. Logical stack writes, the NMI
+acknowledge memory read, and vectored restart-address reads independently add
+the DCNTL memory waits programmed when each access occurs.
+
+The public `HostBus` contract has no interrupt-acknowledge data callback. As
+allowed by Phase 5 task 3, z-core fixes the acknowledge data byte at `FFh`:
+INT0 Mode 0 therefore executes RST 38h, and INT0 Mode 2 uses `FFh` as the low
+byte of its `I:FFh` vector-table address. No runner-only or mode-specific
+vector setter exists.
+
 ## Intentional approximations
 
 ### Bus phases

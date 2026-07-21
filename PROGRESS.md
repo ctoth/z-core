@@ -1510,6 +1510,69 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 The format check completed with no output. P5.3, interrupt machinery, is the
 next unchecked task; Gate G5 remains pending until P5.3 and P5.4 complete.
 
+### P5.3 — Interrupt machinery (2026-07-21)
+
+The core now exposes the plan-owned logical-assertion APIs for INT0/INT1/INT2
+and NMI. NMI assertion edges latch until sampled; external maskable inputs are
+level-sampled and individually gated by ITC before IFF1 is applied. Qualified
+internal peripheral requests enter the same fixed-priority selector; their
+individual device enable and request conditions remain owned by the Phase 6
+peripherals.
+
+The selector implements the UM0050 order TRAP, NMI, INT0, INT1, INT2, PRT0,
+PRT1, DMA0, DMA1, CSI/O, ASCI0, ASCI1. The former plan ordering of DMA0 before
+PRT1 was corrected against Figure 31 and Table 9. INT1, INT2, and internal
+sources vector through I, IL bits 7–5, and their fixed low codes. INT0 uses the
+documented Phase 5 fixed `FFh` acknowledge choice: RST 38h in Mode 0, 0038h in
+Mode 1, and I:FFh vector-table lookup in Mode 2. NMI, maskable IFF changes, EI
+shadow, stack/vector waits, and distinct HALT/SLP wake behavior follow the
+directly verified manual behavior recorded in `docs/verification-log.md` and
+`docs/timing-notes.md`.
+
+Focused P5.3 authority:
+
+```text
+> cargo test -p z180-core interrupts_ -- --nocapture
+   Compiling z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.23s
+     Running unittests src\lib.rs (target\debug\deps\z180_core-5f3557b25cb550c6.exe)
+
+running 5 tests
+test tests::interrupts_nmi_is_edge_latched_and_preserves_iff1_in_iff2 ... ok
+test tests::interrupts_ei_shadow_defers_maskable_service_for_one_instruction ... ok
+test tests::interrupts_vector_through_i_il_in_um0050_priority_order ... ok
+test tests::interrupts_int0_modes_use_fixed_ff_acknowledge_data ... ok
+test tests::interrupts_halt_and_sleep_follow_distinct_wake_rules ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+```
+
+Final workspace authority:
+
+```text
+> cargo test --workspace
+running 17 tests
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+running 39 tests
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.77s
+
+> cargo fmt --all -- --check
+```
+
+The format check completed with no output. P5.4, the complete unit-test matrix
+and MMU/ICR boundary regressions, is the next unchecked task; Gate G5 remains
+pending until P5.4 is complete.
+
 ## Phase 6 — On-chip peripherals
 
 ## Phase 7 — Debug, trace, save-state, disassembler

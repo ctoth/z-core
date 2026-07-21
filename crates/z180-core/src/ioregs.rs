@@ -2,6 +2,7 @@ use crate::Variant;
 
 pub(crate) const IO_REGISTER_COUNT: usize = 0x40;
 pub(crate) const DCNTL: usize = 0x32;
+pub(crate) const IL: usize = 0x33;
 pub(crate) const ITC: usize = 0x34;
 pub(crate) const CBR: usize = 0x38;
 pub(crate) const BBR: usize = 0x39;
