@@ -2390,8 +2390,90 @@ Windows default-test step found that Git had checked the text golden out with
 CRLF while the deterministic renderer emits LF. The instruction listing was
 otherwise byte-identical. Repository `.gitattributes` now marks the crafted
 `.bin` as binary and pins `.golden` fixtures to `text eol=lf`; the exact golden
-and process tests pass locally with those attributes. Corrected CI must be
-green before P7.4 begins.
+and process tests pass locally with those attributes. Corrected CI run
+`29873366711` passed Ubuntu in 1m06s and Windows in 2m02s, including both
+default and state-feature test authorities.
+
+### P7.4 — Bare-ROM runner
+
+Q approved adding the `toml` crate after the plan's closed dependency set
+blocked the required `machine.toml` parser. `z180-cli` uses `toml 1.1.3` with
+only its parsing and Serde features enabled.
+
+`z180-cli run rom.bin --cycles N --trace --config machine.toml` now constructs
+the existing core `MachineConfig` directly. The strict TOML schema requires a
+nonzero `clock_hz`, a `z80180` or `z8s180` `variant`, and a `regions` array.
+Each region names its `kind` (`rom`, `ram`, or `external`), physical `base`, and
+`size`. Exactly one ROM region receives the positional image and its size must
+match exactly; the core remains the authority for alignment, overlap, and
+physical-address validation. `run --help` prints a complete configuration
+example.
+
+Execution steps the core until it consumes at least the requested cycle
+budget. `--trace` drains the existing one-entry instruction trace ring after
+each step and prints the entry cycle, logical PC, physical PC, actual fetched
+bytes, and optable-driven disassembly. Undefined instructions report the core
+TRAP and a sleeping CPU reports that it cannot reach the requested budget
+rather than silently succeeding early. The bare external bus deterministically
+reads `ff` and ignores writes.
+
+Targeted authority:
+
+```text
+> cargo test -p z180-cli run::tests -- --nocapture
+running 5 tests
+test run::tests::config_maps_clock_variant_and_all_region_kinds ... ok
+test run::tests::config_rejects_unknown_fields_and_invalid_rom_bindings ... ok
+test run::tests::sleeping_cpu_reports_that_the_cycle_budget_cannot_be_reached ... ok
+test run::tests::trace_reports_cycle_logical_and_physical_addresses_and_instruction ... ok
+test run::tests::trap_stops_the_runner_with_the_faulting_instruction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out
+
+> cargo test -p z180-cli --test run_cli -- --nocapture
+running 1 test
+test run_command_executes_a_configured_rom_with_trace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+The process test invokes the literal command shape and receives this trace:
+
+```text
+000000000000  0000  000000  00           NOP
+000000000006  0001  000001  00           NOP
+```
+
+Full regression and static authorities:
+
+```text
+> cargo test --workspace
+running 25 tests
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 81 tests
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+> cargo test -p z180-core --features state
+running 86 tests
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+> cargo clippy --workspace --all-targets -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.10s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output.
 
 ## Phase 8 — Python binding, qns migration, reference differential
 
