@@ -80,8 +80,17 @@ impl<B: HostBus> Z180<B> {
 
         let pc = self.registers.get(Reg::PC);
         self.instruction_pc = pc;
-        let opcode = self.read_logical(pc);
-        let descriptor = Self::MAIN_OPCODES[usize::from(opcode)];
+        let first_opcode = self.read_logical(pc);
+        let (opcode, descriptor, m1_fetches) = if first_opcode == 0xcb {
+            let opcode = self.read_logical(pc.wrapping_add(1));
+            (opcode, Self::CB_OPCODES[usize::from(opcode)], 2)
+        } else {
+            (
+                first_opcode,
+                Self::MAIN_OPCODES[usize::from(first_opcode)],
+                1,
+            )
+        };
         let Some(handler) = descriptor.handler else {
             return 0;
         };
@@ -90,7 +99,9 @@ impl<B: HostBus> Z180<B> {
         for _ in 0..descriptor.length {
             self.registers.increment_pc();
         }
-        self.registers.increment_r();
+        for _ in 0..m1_fetches {
+            self.registers.increment_r();
+        }
 
         // P2.2 owns the EI shadow state. P2.3 will sample this state at the
         // interrupt-check point; consuming it before dispatch lets a second EI
@@ -168,8 +179,12 @@ impl<B: HostBus> Z180<B> {
         self.memory.poke(&mut self.bus, phys, value);
     }
 
-    pub fn is_opcode_implemented(opcode: u8) -> bool {
-        Self::MAIN_OPCODES[usize::from(opcode)].handler.is_some()
+    pub fn is_instruction_implemented(opcodes: &[u8]) -> bool {
+        match opcodes {
+            [opcode] => Self::MAIN_OPCODES[usize::from(*opcode)].handler.is_some(),
+            [0xcb, opcode] => Self::CB_OPCODES[usize::from(*opcode)].handler.is_some(),
+            _ => false,
+        }
     }
 
     fn interrupt_check_point(&mut self) -> Option<u32> {
@@ -494,6 +509,52 @@ impl<B: HostBus> Z180<B> {
         self.set_accumulator_and_flags(result, flags);
     }
 
+    pub(crate) fn execute_cb_rotate_shift(&mut self, opcode: u8) {
+        let code = opcode & 0x07;
+        let value = self.read_reg8(code);
+        let old_carry = u8::from(self.flags() & FLAG_C != 0);
+        let (result, carry) = match (opcode >> 3) & 0x07 {
+            0 => (value.rotate_left(1), value >> 7),
+            1 => (value.rotate_right(1), value & 1),
+            2 => ((value << 1) | old_carry, value >> 7),
+            3 => ((value >> 1) | (old_carry << 7), value & 1),
+            4 => (value << 1, value >> 7),
+            5 => ((value >> 1) | (value & 0x80), value & 1),
+            7 => (value >> 1, value & 1),
+            _ => return,
+        };
+        let flags = Self::sign_zero_xy(result) | Self::parity_flag(result) | carry;
+        self.write_reg8(code, result);
+        self.set_flags(flags);
+    }
+
+    pub(crate) fn execute_cb_bit(&mut self, opcode: u8) {
+        let bit = (opcode >> 3) & 0x07;
+        let value = self.read_reg8(opcode & 0x07);
+        let mask = 1_u8 << bit;
+        let mut flags = (self.flags() & FLAG_C) | (value & FLAG_XY) | FLAG_H;
+        if value & mask == 0 {
+            flags |= FLAG_Z | FLAG_PV;
+        } else if bit == 7 {
+            flags |= FLAG_S;
+        }
+        self.set_flags(flags);
+    }
+
+    pub(crate) fn execute_cb_res(&mut self, opcode: u8) {
+        let code = opcode & 0x07;
+        let value = self.read_reg8(code);
+        let mask = 1_u8 << ((opcode >> 3) & 0x07);
+        self.write_reg8(code, value & !mask);
+    }
+
+    pub(crate) fn execute_cb_set(&mut self, opcode: u8) {
+        let code = opcode & 0x07;
+        let value = self.read_reg8(code);
+        let mask = 1_u8 << ((opcode >> 3) & 0x07);
+        self.write_reg8(code, value | mask);
+    }
+
     pub(crate) fn execute_ld_absolute_hl(&mut self, _opcode: u8) {
         let address = self.immediate16();
         self.write_word(address, self.registers.get(Reg::HL));
@@ -791,17 +852,29 @@ mod tests {
         for opcode in 0_u8..=u8::MAX {
             let expected = !matches!(opcode, 0xcb | 0xdd | 0xed | 0xfd);
             assert_eq!(
-                Z180::<NullBus>::is_opcode_implemented(opcode),
+                Z180::<NullBus>::is_instruction_implemented(&[opcode]),
                 expected,
                 "opcode {opcode:02x}"
             );
         }
+
+        for opcode in 0_u8..=u8::MAX {
+            let expected = !(0x30..=0x37).contains(&opcode);
+            assert_eq!(
+                Z180::<NullBus>::is_instruction_implemented(&[0xcb, opcode]),
+                expected,
+                "CB {opcode:02x}"
+            );
+        }
+
+        assert!(!Z180::<NullBus>::is_instruction_implemented(&[0xdd, 0x00]));
     }
 
     #[test]
     fn unimplemented_opcode_does_not_execute() {
         let mut cpu = machine();
         cpu.mem_poke(0x1234, 0xcb);
+        cpu.mem_poke(0x1235, 0x30);
         cpu.set_reg(Reg::PC, 0x1234);
         cpu.set_reg(Reg::IR, 0x5678);
 

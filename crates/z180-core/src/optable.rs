@@ -6,6 +6,7 @@ pub(crate) type Handler<B> = fn(&mut Z180<B>, u8);
 pub(crate) enum OperandKind {
     None,
     Accumulator,
+    Bit,
     Condition,
     Immediate8,
     Immediate16,
@@ -407,8 +408,67 @@ const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
     table
 }
 
+const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
+    let mut table = [Opcode::UNIMPLEMENTED; 256];
+    let mut opcode = 0_usize;
+
+    while opcode < 0x40 {
+        if opcode < 0x30 || opcode >= 0x38 {
+            let mnemonic = match (opcode >> 3) & 0x07 {
+                0 => "RLC {r}",
+                1 => "RRC {r}",
+                2 => "RL {r}",
+                3 => "RR {r}",
+                4 => "SLA {r}",
+                5 => "SRA {r}",
+                _ => "SRL {r}",
+            };
+            table[opcode] = Opcode::implemented(
+                mnemonic,
+                [OperandKind::Reg8Destination, OperandKind::None],
+                2,
+                Z180::<B>::execute_cb_rotate_shift,
+            );
+        }
+        opcode += 1;
+    }
+
+    while opcode < 0x80 {
+        table[opcode] = Opcode::implemented(
+            "BIT {bit},{r}",
+            [OperandKind::Bit, OperandKind::Reg8Source],
+            2,
+            Z180::<B>::execute_cb_bit,
+        );
+        opcode += 1;
+    }
+
+    while opcode < 0xc0 {
+        table[opcode] = Opcode::implemented(
+            "RES {bit},{r}",
+            [OperandKind::Bit, OperandKind::Reg8Destination],
+            2,
+            Z180::<B>::execute_cb_res,
+        );
+        opcode += 1;
+    }
+
+    while opcode < 0x100 {
+        table[opcode] = Opcode::implemented(
+            "SET {bit},{r}",
+            [OperandKind::Bit, OperandKind::Reg8Destination],
+            2,
+            Z180::<B>::execute_cb_set,
+        );
+        opcode += 1;
+    }
+
+    table
+}
+
 impl<B: HostBus> Z180<B> {
     pub(crate) const MAIN_OPCODES: [Opcode<B>; 256] = build_main_table::<B>();
+    pub(crate) const CB_OPCODES: [Opcode<B>; 256] = build_cb_table::<B>();
 }
 
 #[cfg(test)]
@@ -456,5 +516,22 @@ mod tests {
             table[0x78].operands,
             [OperandKind::Reg8Destination, OperandKind::Reg8Source]
         );
+    }
+
+    #[test]
+    fn cb_table_contains_every_documented_form_except_sll() {
+        let table = &Z180::<NullBus>::CB_OPCODES;
+        for (opcode, entry) in table.iter().enumerate() {
+            let expected = !(0x30..=0x37).contains(&opcode);
+            assert_eq!(entry.handler.is_some(), expected, "CB {opcode:02x}");
+            if expected {
+                assert_eq!(entry.length, 2, "CB {opcode:02x}");
+            }
+        }
+        assert_eq!(table[0x00].mnemonic, "RLC {r}");
+        assert_eq!(table[0x38].mnemonic, "SRL {r}");
+        assert_eq!(table[0x40].mnemonic, "BIT {bit},{r}");
+        assert_eq!(table[0x80].mnemonic, "RES {bit},{r}");
+        assert_eq!(table[0xc0].mnemonic, "SET {bit},{r}");
     }
 }

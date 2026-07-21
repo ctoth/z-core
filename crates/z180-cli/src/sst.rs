@@ -466,7 +466,7 @@ fn validate_mmu_probes(location: &str, probes: &[MmuProbe]) -> Result<()> {
 }
 
 fn implemented(opcodes: &[u8]) -> bool {
-    matches!(opcodes, [opcode] if Z180::<ScriptedBus>::is_opcode_implemented(*opcode))
+    Z180::<ScriptedBus>::is_instruction_implemented(opcodes)
 }
 
 fn run_file(

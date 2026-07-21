@@ -687,6 +687,53 @@ Phase 2 is complete. Phase 3 task 1 is the next unchecked plan item.
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
 
+### P3.1 — Documented CB page (2026-07-20)
+
+The core now decodes the CB page as a two-byte instruction and increments R
+for both M1 fetches. A dedicated opcode table owns all documented CB rotates,
+shifts, BIT, RES, and SET forms. CB `30..37` SLL remains undefined and has no
+handler; TRAP behavior remains owned by Phase 3 task 5.
+
+Direct UM0050 page-image inspection established the documented flag effects.
+The verification log records the manual-defined behavior and the deterministic
+free choice for BIT's UM-undefined S and P/V outputs. The SST runner now asks
+the core whether a complete opcode sequence is implemented, activating CB
+files without adding a runner-side execution adapter.
+
+External corpus results:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only "cb 00,cb 08,cb 10,cb 18,cb 20,cb 28,cb 38,cb 40,cb 7f,cb 80,cb bf,cb c0,cb ff"
+SUMMARY pass=13000 fail=0 unimplemented=0 excluded=0
+
+> cargo run -p z180-cli -- sst --dir tests/sst/v1
+SUMMARY pass=500000 fail=0 unimplemented=205000 excluded=899
+```
+
+All 248 documented CB files pass all 248,000 cases. The eight SLL files are
+explicitly excluded under the Appendix A policy. The 205 remaining
+UNIMPLEMENTED files are only the later Phase 3 DD/FD, DDCB/FDCB, and ED
+surfaces.
+
+The workspace quality authorities passed after the final diff audit:
+
+```text
+> cargo test --workspace
+z180-cli: 12 passed; 0 failed
+z180-core: 14 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+
+> cargo fmt --check
+```
+
+The format check completed successfully with no output. The ZEX harness's
+deliberately unimplemented fixture moved from newly implemented `CB` to the
+still-unimplemented `DD` prefix; its behavior is unchanged. Phase 3 task 2 is
+the next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window
