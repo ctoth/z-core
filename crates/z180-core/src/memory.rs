@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::HostBus;
 
@@ -54,6 +55,42 @@ pub enum ConfigError {
     OverlappingRegion { base: u32, size: u32 },
     RomSizeMismatch { region_size: u32, data_size: usize },
 }
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPhysicalAddressBits(bits) => {
+                write!(
+                    formatter,
+                    "physical address width {bits} is outside 20..=24"
+                )
+            }
+            Self::UnalignedRegion { base, size } => write!(
+                formatter,
+                "region base {base:#x} and size {size:#x} must be 4 KiB aligned"
+            ),
+            Self::RegionOutOfRange { base, size } => {
+                write!(
+                    formatter,
+                    "region base {base:#x} size {size:#x} is out of range"
+                )
+            }
+            Self::OverlappingRegion { base, size } => write!(
+                formatter,
+                "region base {base:#x} size {size:#x} overlaps an existing region"
+            ),
+            Self::RomSizeMismatch {
+                region_size,
+                data_size,
+            } => write!(
+                formatter,
+                "ROM region size {region_size:#x} does not match data size {data_size:#x}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for ConfigError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Page {

@@ -26,6 +26,9 @@ pub struct Z180<B: HostBus> {
     instruction_pc: u16,
     cycle_count: u64,
     halted: bool,
+    iff1: bool,
+    iff2: bool,
+    interrupt_mode: u8,
 }
 
 impl<B: HostBus> Z180<B> {
@@ -37,6 +40,9 @@ impl<B: HostBus> Z180<B> {
             instruction_pc: 0,
             cycle_count: 0,
             halted: false,
+            iff1: false,
+            iff2: false,
+            interrupt_mode: 0,
         })
     }
 
@@ -44,6 +50,9 @@ impl<B: HostBus> Z180<B> {
         self.registers = Registers::default();
         self.instruction_pc = 0;
         self.halted = false;
+        self.iff1 = false;
+        self.iff2 = false;
+        self.interrupt_mode = 0;
     }
 
     pub fn step(&mut self) -> u32 {
@@ -90,6 +99,30 @@ impl<B: HostBus> Z180<B> {
 
     pub fn halted(&self) -> bool {
         self.halted
+    }
+
+    pub fn iff1(&self) -> bool {
+        self.iff1
+    }
+
+    pub fn set_iff1(&mut self, enabled: bool) {
+        self.iff1 = enabled;
+    }
+
+    pub fn iff2(&self) -> bool {
+        self.iff2
+    }
+
+    pub fn set_iff2(&mut self, enabled: bool) {
+        self.iff2 = enabled;
+    }
+
+    pub fn interrupt_mode(&self) -> u8 {
+        self.interrupt_mode
+    }
+
+    pub fn set_interrupt_mode(&mut self, mode: u8) {
+        self.interrupt_mode = mode;
     }
 
     pub fn reg(&self, reg: Reg) -> u16 {
@@ -292,6 +325,9 @@ mod tests {
         let mut cpu = machine();
         cpu.mem_poke(0, 0x76);
         cpu.set_reg(Reg::IR, 0xab7f);
+        cpu.set_iff1(true);
+        cpu.set_iff2(true);
+        cpu.set_interrupt_mode(2);
         cpu.step();
         cpu.mem_poke(0x4000, 0xcc);
 
@@ -300,6 +336,9 @@ mod tests {
         assert_eq!(cpu.reg(Reg::IR), 0);
         assert_eq!(cpu.reg(Reg::PC), 0);
         assert!(!cpu.halted());
+        assert!(!cpu.iff1());
+        assert!(!cpu.iff2());
+        assert_eq!(cpu.interrupt_mode(), 0);
         assert_eq!(cpu.mem_peek(0x4000), 0xcc);
     }
 }

@@ -13,3 +13,8 @@
 | Hardware RESET restarts execution at logical and physical address 00000h | Operation Modes, RESET Timing, Figure 15, p. 25 | 2026-07-20 |
 | I resets to 00h | Software Architecture, Interrupt Vector Register (I), p. 177 | 2026-07-20 |
 | Free choice: CPU registers without a UM0050 reset value are initialized to 0000h for deterministic emulation | UM0050 specifies PC/I/R reset values but no reset value for the remaining CPU registers; z-core deterministic policy | 2026-07-20 |
+| IEF1 and IEF2 reset to 0 | Interrupt Sources During RESET, p. 83 | 2026-07-20 |
+| DD/FD are defined only where Table 48 substitutes IX/IY for an HL or (HL) operand; JP (HL) is substituted, while prefixed EX DE,HL is illegal | Op Code Map, Table 48 notes, pp. 247–248 | 2026-07-20 |
+| CB opcodes 30h–37h have no defined SLL operation on Z80180 | Op Code Map, Table 49, p. 249 | 2026-07-20 |
+| The defined ED opcode set is exactly the populated cells in the Z80180 ED map; blank ED cells are undefined | Op Code Map, Table 50, p. 250; TRAP Interrupt, pp. 70–72 | 2026-07-20 |
+| An undefined first, second, or third opcode fetch invokes TRAP; UFO distinguishes second/third-opcode cases | TRAP Interrupt and Figures 32–33, pp. 70–72 | 2026-07-20 |
