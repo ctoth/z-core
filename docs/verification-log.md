@@ -7,8 +7,21 @@
 | Official source: https://www.zilog.com/docs/z180/um0050.pdf | Zilog documentation listing for UM0050 | 2026-07-20 |
 | CPU register set comprises AF, BC, DE, HL, alternate AF/BC/DE/HL, I, R, IX, IY, SP, and PC | Software Architecture, CPU Registers, Figure 74, pp. 175–177 | 2026-07-20 |
 | R bits 0–6 increment on every CPU opcode-fetch (M1) cycle; R resets to 00h | Software Architecture, R Counter (R), p. 177 | 2026-07-20 |
+| S reflects result bit 7, Z reflects a zero result, H records low-nibble carry/borrow, P/V is parity for logical results or signed overflow for arithmetic, N distinguishes subtraction from addition, and C records high-bit carry/borrow | Software Architecture, Flag Register, pp. 178–179 | 2026-07-20 |
 | Register codes 000–101 and 111 select B, C, D, E, H, L, and A respectively | Instruction Set, Table 32, p. 207 | 2026-07-20 |
+| Unprefixed ADD/ADC/SUB/SBC/CP set S, Z, H, arithmetic overflow in P/V, N according to add/subtract, and C; AND sets H and parity while resetting N/C; OR/XOR reset H/N/C and set parity | Arithmetic and Logical Instructions (8-bit), Table 38, pp. 211–216 | 2026-07-20 |
+| Unprefixed INC/DEC update S, Z, H, and overflow, leave C unchanged, and respectively reset/set N; 16-bit INC/DEC leave every flag unchanged | Arithmetic Instructions, Tables 38 and 40, pp. 213, 221 | 2026-07-20 |
+| RLCA/RRCA/RLA/RRA rotate A as named, update C from the shifted-out bit, reset H and N, and leave S, Z, and P/V unchanged | Rotate and Shift Instructions, Table 39, pp. 216–217 | 2026-07-20 |
+| ADD HL,ww adds the selected 16-bit pair into HL, updates H and C, resets N, and leaves S, Z, and P/V unchanged | Arithmetic Instructions (16-bit), Table 40, p. 221 | 2026-07-20 |
 | The 01dddsss block encodes LD r,r', LD r,(HL), and LD (HL),r; these operations do not alter flags | Data Transfer Instructions, Table 41, pp. 222–223 | 2026-07-20 |
+| All unprefixed 8-bit and 16-bit load forms in Tables 41–42 leave flags unchanged; 16-bit memory values are stored and loaded low byte at the named address and high byte at address plus one | Data Transfer Instructions, Tables 41–42, pp. 222–225 | 2026-07-20 |
+| PUSH stores the pair low byte at SP-2 and high byte at SP-1 before setting SP to SP-2; POP restores low from SP and high from SP+1 before adding two to SP; flags are unchanged except that POP AF restores F from the stack | Stack and Exchange, Table 44, pp. 227–228 | 2026-07-20 |
+| EX AF,AF', EXX, EX DE,HL, and EX (SP),HL perform the named exchanges and leave flags unchanged except for exchanging F as part of AF | Stack and Exchange, Table 44, p. 228 | 2026-07-20 |
+| Unprefixed CALL, JP, JR, DJNZ, RET, conditional forms, and RST use the documented conditions and stack ordering and do not alter flags | Program Control Instructions, Table 45, pp. 229–230 | 2026-07-20 |
+| IN A,(n) and OUT (n),A form a 16-bit port with n on A0–A7 and A on A8–A15; IN replaces A, OUT writes A, and neither changes flags | I/O Instructions, Table 46, pp. 231–232 | 2026-07-20 |
+| DAA adjusts BCD addition/subtraction using H's low-nibble carry/borrow indication; it updates S, Z, H, parity, and C while preserving N | Software Architecture, Flag Register, p. 179; Special Control Instructions, Table 47, p. 235 | 2026-07-20 |
+| CPL complements A, sets H and N, and leaves S/Z/P/V/C unchanged; SCF sets C and resets H/N; CCF complements C, copies old C into H, and resets N | Arithmetic and Logical Instructions, Table 38, p. 212; Special Control Instructions, Table 47, p. 235 | 2026-07-20 |
+| DI clears IEF1/IEF2, EI sets IEF1/IEF2, and interrupts are not sampled at the end of either instruction; both leave flags unchanged | Special Control Instructions, Table 47 and note 7, p. 235 | 2026-07-20 |
 | NOP is opcode 00h and HALT is opcode 76h; neither alters flags | Special Control Instructions, Table 47, p. 235; Op Code Map, Table 48, p. 247 | 2026-07-20 |
 | Hardware RESET restarts execution at logical and physical address 00000h | Operation Modes, RESET Timing, Figure 15, p. 25 | 2026-07-20 |
 | I resets to 00h | Software Architecture, Interrupt Vector Register (I), p. 177 | 2026-07-20 |

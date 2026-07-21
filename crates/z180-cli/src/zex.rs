@@ -115,8 +115,8 @@ mod tests {
     #[test]
     fn unimplemented_opcode_is_reported_cleanly() {
         let mut output = Vec::new();
-        run_program(&[0xc3], &mut output).expect("unimplemented opcode is a clean outcome");
-        assert_eq!(output, b"unimplemented opcode at PC=0100: c3\n");
+        run_program(&[0xcb], &mut output).expect("unimplemented opcode is a clean outcome");
+        assert_eq!(output, b"unimplemented opcode at PC=0100: cb\n");
     }
 
     #[test]

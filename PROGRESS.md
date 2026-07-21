@@ -566,6 +566,60 @@ Doc-tests z180_core: 0 passed; 0 failed
 The format check completed successfully with no output. Optable regressions
 prove the exact populated set and the NOP/HALT/LD metadata.
 
+### P2.2 — Documented unprefixed opcodes (2026-07-20)
+
+All 252 documented main-page instructions are implemented from UM0050 Tables
+38-47. `CB`, `DD`, `ED`, and `FD` remain unimplemented prefix bytes for Phase
+3. The table remains the single owner of mnemonic, operands, byte length,
+provisional timing state, and handler. Immediate `IN A,(n)` / `OUT (n),A`
+forms use the documented `A:n` 16-bit port and route directly to `HostBus`;
+the internal-I/O window remains owned by Phase 5.
+
+The core now covers loads, ALU and documented flags, 8/16-bit INC/DEC,
+accumulator rotates, DAA, CPL/SCF/CCF, control flow, stack/exchange, HALT,
+and DI/EI. EI shadow is private state: EI establishes it, the next executed
+instruction consumes it before dispatch, consecutive EI refreshes it, and DI
+clears it. No privileged SST-only state API was added.
+
+DAA has an exhaustive core regression over all 2,048 combinations of A and
+N/H/C. The external DAA corpus independently passes all 1,000 cases:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 27
+PASS 27: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=1000 fail=0 unimplemented=0 excluded=0
+```
+
+The complete main-page SST slice is green:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 00..ff
+PASS 00..ff: 252 documented files, each pass=1000 fail=0 unimplemented=0
+SUMMARY pass=252000 fail=0 unimplemented=0 excluded=0
+```
+
+Final workspace authority:
+
+```text
+> cargo test --workspace
+running 12 tests (z180-cli)
+test result: ok. 12 passed; 0 failed; 0 ignored
+running 12 tests (z180-core)
+test result: ok. 12 passed; 0 failed; 0 ignored
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.82s
+
+> cargo fmt --all --check
+```
+
+The format check completed successfully with no output. The ZEX harness's
+deliberately unimplemented test byte moved from newly implemented `C3` to the
+still-unimplemented `CB` prefix; harness behavior is unchanged.
+
+P2.3 and Gate G2 remain unchecked.
+
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
 
 ## Phase 4 — Timing and ZEXDOC
