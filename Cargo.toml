@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/z180-cli",
+    "crates/z180-core",
+]
+resolver = "3"
