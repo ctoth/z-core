@@ -1,0 +1,13 @@
+[package]
+name = "z180-py"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py311"] }
+z180-core = { path = "../z180-core", features = ["state"] }

@@ -151,7 +151,13 @@ struct TraceCapture {
 }
 
 #[cfg(feature = "state")]
-const STATE_VERSION: u8 = 3;
+const STATE_VERSION: u8 = 4;
+const EXT_MAP_TABLE_LEN: usize = 1 << 20;
+
+enum ExtMapper {
+    Function(fn(u32) -> u32),
+    Table(Vec<u32>),
+}
 
 #[cfg(feature = "state")]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,6 +192,7 @@ pub struct Z180<B: HostBus> {
     variant: Variant,
     io_regs: [u8; IO_REGISTER_COUNT],
     mmu_pages: [u32; 16],
+    ext_mapper: Option<ExtMapper>,
     timing_branch_taken: bool,
     timing_repeat_iterations: u16,
     timing_memory_waits: u32,
@@ -317,6 +324,7 @@ impl<B: HostBus> Z180<B> {
             variant: config.variant,
             io_regs,
             mmu_pages: [0; 16],
+            ext_mapper: None,
             timing_branch_taken: false,
             timing_repeat_iterations: 0,
             timing_memory_waits: 0,
@@ -963,6 +971,7 @@ impl<B: HostBus> Z180<B> {
         if state.events.len() > state.event_capacity
             || state.next_watch_id == 0
             || !insn_trace_is_valid
+            || !state.memory.is_valid()
         {
             return Err(StateError::Decode);
         }
@@ -1108,6 +1117,39 @@ impl<B: HostBus> Z180<B> {
 
     pub fn mem_poke(&mut self, phys: u32, value: u8) {
         self.memory.poke(&mut self.bus, phys, value);
+    }
+
+    pub fn remap(&mut self, base: u32, size: u32, kind: RegionKind) -> Result<(), ConfigError> {
+        self.memory.remap(base, size, kind)
+    }
+
+    pub fn set_ext_mapper(&mut self, mapper: Option<fn(u32) -> u32>) {
+        self.ext_mapper = mapper.map(ExtMapper::Function);
+    }
+
+    pub fn set_ext_map_table(&mut self, table: Option<Vec<u32>>) -> Result<(), ConfigError> {
+        if let Some(table) = &table
+            && table.len() != EXT_MAP_TABLE_LEN
+        {
+            return Err(ConfigError::InvalidExtMapTableLength {
+                expected: EXT_MAP_TABLE_LEN,
+                actual: table.len(),
+            });
+        }
+        self.ext_mapper = table.map(ExtMapper::Table);
+        Ok(())
+    }
+
+    pub fn ram_regions(&self) -> Vec<(u32, u32)> {
+        self.memory.ram_regions()
+    }
+
+    pub fn ram_region(&self, base: u32) -> Option<&[u8]> {
+        self.memory.ram_region(base)
+    }
+
+    pub fn ram_region_mut(&mut self, base: u32) -> Option<&mut [u8]> {
+        self.memory.ram_region_mut(base)
     }
 
     pub fn is_instruction_implemented(opcodes: &[u8]) -> bool {
@@ -2371,7 +2413,7 @@ impl<B: HostBus> Z180<B> {
         self.timing_memory_waits = self
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
-        let physical = self.mmu_translate(logical);
+        let physical = self.map_external_address(self.mmu_translate(logical));
         let value = self.emulation_mem_read(physical);
         self.capture_insn_byte(logical, value);
         value
@@ -2381,8 +2423,18 @@ impl<B: HostBus> Z180<B> {
         self.timing_memory_waits = self
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
-        let physical = self.mmu_translate(logical);
+        let physical = self.map_external_address(self.mmu_translate(logical));
         self.emulation_mem_write(physical, value);
+    }
+
+    fn map_external_address(&self, physical: u32) -> u32 {
+        match &self.ext_mapper {
+            Some(ExtMapper::Function(mapper)) => mapper(physical),
+            Some(ExtMapper::Table(table)) => {
+                table.get(physical as usize).copied().unwrap_or(physical)
+            }
+            None => physical,
+        }
     }
 
     fn emulation_mem_read(&mut self, physical: u32) -> u8 {
@@ -3432,6 +3484,127 @@ mod tests {
         assert_ne!(cpu.step(), 0);
         assert_eq!(cpu.mem_peek(0x1_3000), 0xa5);
         assert_eq!(cpu.mem_peek(0x3000), 0x00);
+    }
+
+    #[test]
+    fn remap_replaces_pages_and_preserves_unaffected_ram_storage() {
+        let config = MachineConfig {
+            regions: vec![
+                RegionDef {
+                    base: 0,
+                    size: 0x3000,
+                    kind: RegionKind::Ram,
+                },
+                RegionDef {
+                    base: 0x4000,
+                    size: 0x1000,
+                    kind: RegionKind::Ram,
+                },
+            ],
+            ..MachineConfig::default()
+        };
+        let mut cpu = Z180::new(config, NullBus).expect("split RAM configuration must be valid");
+        cpu.ram_region_mut(0)
+            .expect("the first RAM region must be exposed")[0] = 0x5a;
+        cpu.mem_poke(0x2000, 0x66);
+        let first_pointer = cpu
+            .ram_region(0)
+            .expect("the first RAM region must be exposed")
+            .as_ptr();
+        assert_eq!(cpu.ram_regions(), vec![(0, 0x3000), (0x4000, 0x1000)]);
+        cpu.remap(0, 0, RegionKind::Ram)
+            .expect("a zero-sized remap must be a no-op");
+        assert_eq!(
+            cpu.ram_region(0)
+                .expect("a zero-sized remap must preserve RAM")
+                .as_ptr(),
+            first_pointer
+        );
+
+        cpu.remap(0x4000, 0x1000, RegionKind::External)
+            .expect("an unrelated RAM region must remap");
+        assert_eq!(
+            cpu.ram_region(0)
+                .expect("the unaffected RAM region must remain exposed")
+                .as_ptr(),
+            first_pointer
+        );
+        cpu.remap(0x1000, 0x1000, RegionKind::Rom(vec![0xa5; 0x1000]))
+            .expect("the middle RAM page must remap to ROM");
+        assert_eq!(cpu.ram_regions(), vec![(0, 0x1000), (0x2000, 0x1000)]);
+        assert_eq!(cpu.ram_region(0).map(<[u8]>::len), Some(0x1000));
+        assert_eq!(cpu.ram_region(0x2000).map(<[u8]>::len), Some(0x1000));
+        assert_eq!(cpu.mem_peek(0), 0x5a);
+        assert_eq!(cpu.mem_peek(0x1000), 0xa5);
+        assert_eq!(cpu.mem_peek(0x2000), 0x66);
+
+        let error = cpu
+            .remap(0, 0x1000, RegionKind::Rom(vec![0; 1]))
+            .expect_err("invalid remaps must be atomic");
+        assert_eq!(
+            error,
+            ConfigError::RomSizeMismatch {
+                region_size: 0x1000,
+                data_size: 1,
+            }
+        );
+        assert_eq!(cpu.mem_peek(0), 0x5a);
+
+        cpu.remap(0x1000, 0x1000, RegionKind::Ram)
+            .expect("the ROM page must remap to fresh RAM");
+        assert_eq!(cpu.mem_peek(0x1000), 0, "new RAM is zero initialized");
+    }
+
+    #[test]
+    fn external_mapper_function_and_table_apply_after_mmu_translation() {
+        fn bank_one(physical: u32) -> u32 {
+            physical + 0x1_0000
+        }
+
+        let config = MachineConfig {
+            regions: vec![RegionDef {
+                base: 0x1_0000,
+                size: 0x1000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        let mut cpu = Z180::new(config, NullBus).expect("banked RAM configuration must be valid");
+        cpu.mem_poke(0x1_0000, 0x3e);
+        cpu.mem_poke(0x1_0001, 0x5a);
+        cpu.set_ext_mapper(Some(bank_one));
+        assert_eq!(cpu.mmu_translate(0), 0, "MMU visibility remains unmapped");
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.reg(Reg::AF) >> 8, 0x5a);
+
+        let error = cpu
+            .set_ext_map_table(Some(vec![0; 3]))
+            .expect_err("a short mapper table must be rejected");
+        assert_eq!(
+            error,
+            ConfigError::InvalidExtMapTableLength {
+                expected: EXT_MAP_TABLE_LEN,
+                actual: 3,
+            }
+        );
+        cpu.set_reg(Reg::PC, 0);
+        assert_ne!(cpu.step(), 0, "rejection preserves the prior mapper");
+
+        let mut table = (0..EXT_MAP_TABLE_LEN as u32).collect::<Vec<_>>();
+        for physical in &mut table[..0x1000] {
+            *physical += 0x1_0000;
+        }
+        cpu.set_ext_map_table(Some(table))
+            .expect("a complete mapper table must be accepted");
+        cpu.set_reg(Reg::PC, 0);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.reg(Reg::AF) >> 8, 0x5a);
+
+        cpu.set_ext_map_table(None)
+            .expect("clearing a mapper table must succeed");
+        cpu.set_reg(Reg::PC, 0);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.reg(Reg::PC), 0x0038, "unmapped FFh executes RST 38h");
     }
 
     #[test]

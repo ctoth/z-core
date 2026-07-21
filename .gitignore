@@ -5,3 +5,4 @@ node_modules/
 /tools/reference/.venv/
 /tools/reference/__pycache__/
 /tools/reference/.pytest_cache/
+__pycache__/

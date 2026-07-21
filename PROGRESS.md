@@ -2553,6 +2553,89 @@ that landing completes.
 
 ## Phase 8 — Python binding, qns migration, reference differential
 
+### P8.1 — Python binding
+
+AUTHORIZED: Q approved preserving the plan-literal Rust method unchanged and
+adding
+`set_ext_map_table(&mut self, table: Option<Vec<u32>>) -> Result<(),
+ConfigError>` for language bindings. It accepts exactly 1,048,576 entries,
+rejects every other length atomically, and uses the same private mapper path as
+`set_ext_mapper`. Python `Machine.set_ext_mapper(callable)` samples all 20-bit
+inputs before mutably borrowing the machine, then installs this table; `None`
+clears it. The callable is never invoked by the execution hot path.
+
+Implementation is complete as the single P8.1 source slice. The public
+package is `z180`; its private native module is `z180._native`, preserving
+the package namespace required by P8.2's `z180.compat`. The extension uses
+PyO3 0.29 with `abi3-py311` and the wheel is built by maturin.
+
+`Machine(config_dict)` rejects unknown fields and maps all section 2.2
+lifecycle, register, interrupt, MMU, serial, physical-memory, debug/event,
+instruction-trace, and save-state APIs. It additionally exposes the core's
+public pin/state controls. Events and trace entries are typed-by-`kind`
+Python dictionaries; `Reg`, `IrqLine`, and `WatchKind` are Python enum-like
+classes and `WatchId` stays opaque.
+
+RAM was changed from one concatenated allocation to stable per-region stores
+so remapping one page range cannot invalidate an unrelated exported region.
+`Machine.ram_regions()` discovers exact contiguous RAM regions and
+`Machine.ram(base)` returns a writable, zero-copy `memoryview`. The exporter
+retains its owning machine. Active views reject `remap` and `load_state` with
+`BufferError`; ordinary execution and debugger writes remain visible through
+the view. Save-state format version advanced from 3 to 4 for the memory
+layout, and state loading validates every decoded page/store reference before
+commit.
+
+The Rust core authorities for remapping and both mapper forms pass. The
+default core suite passed 83/83 and the state-enabled suite passed 89/89.
+The Python authority exercises the entire exposed surface, strict config,
+bidirectional zero-copy behavior, storage guards, complete mapper sampling
+and failure atomicity, events/traces, and save/load:
+
+```text
+> uv run --project crates/z180-py pytest crates/z180-py/tests -q
+.......                                                                  [100%]
+7 passed in 0.13s
+```
+
+The release wheel is genuinely abi3 with a Python 3.11 floor and contains
+only the package source, native extension, and distribution metadata:
+
+```text
+> uv run --with maturin maturin build --release --out ../../target/wheels
+Found pyo3 bindings with abi3-py3.11 support
+Built wheel for abi3 Python >= 3.11 to
+../../target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl
+
+> uv run --isolated --python 3.11 \
+    --with ./target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl \
+    --with pytest pytest crates/z180-py/tests -q
+.......                                                                  [100%]
+7 passed in 0.13s
+```
+
+Static and full-workspace authorities:
+
+```text
+> cargo fmt --all -- --check
+
+> cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.43s
+
+> cargo test --workspace
+running 25 tests
+test result: ok. 25 passed; 0 failed; 0 ignored
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored
+running 89 tests
+test result: ok. 89 passed; 0 failed; 0 ignored
+```
+
+P8.1 is complete pending its commit, push, and CI. P8.2 is next after that
+landing completes.
+
 ## Phase 9 — WASM and TypeScript
 
 ## Phase 10 — Documentation and v0.1.0

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.10,<2"]
+build-backend = "maturin"
+
+[project]
+name = "z180"
+version = "0.1.0"
+description = "Python bindings for the z180-core emulator"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "z180._native"
+features = ["pyo3/extension-module"]
+exclude = ["**/__pycache__/**"]
