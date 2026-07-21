@@ -3484,6 +3484,65 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "state")]
+    #[test]
+    fn determinism_timer_asci_dma_matches_after_ten_million_cycles() {
+        const RUN_CYCLES: u32 = 10_000_000;
+
+        let mut first = mmu_machine();
+        let mut second = mmu_machine();
+        for cpu in [&mut first, &mut second] {
+            cpu.write_internal_io(DCNTL, 0x80);
+
+            cpu.set_reg(Reg::PC, 0xffff);
+            cpu.mem_poke(0xffff, 0xdd);
+            cpu.mem_poke(0x0000, 0x76);
+
+            cpu.write_internal_io(TMDR0L, 0x07);
+            cpu.write_internal_io(TMDR0H, 0x00);
+            cpu.write_internal_io(RLDR0L, 0x0b);
+            cpu.write_internal_io(RLDR0H, 0x00);
+            cpu.write_internal_io(TCR, 0x01);
+
+            cpu.write_internal_io(CNTLB0, 0x00);
+            cpu.write_internal_io(CNTLA0, 0x64);
+            cpu.write_internal_io(TDR0, 0x5a);
+            assert!(cpu.asci_rx_push(0, 0xa5));
+
+            for offset in 0_u32..0x100 {
+                cpu.mem_poke(0x1_0000 + offset, offset as u8 ^ 0xa5);
+            }
+            cpu.write_internal_io(SAR0L, 0x00);
+            cpu.write_internal_io(SAR0H, 0x00);
+            cpu.write_internal_io(SAR0B, 0x01);
+            cpu.write_internal_io(DAR0L, 0x00);
+            cpu.write_internal_io(DAR0H, 0x00);
+            cpu.write_internal_io(DAR0B, 0x02);
+            cpu.write_internal_io(BCR0L, 0x00);
+            cpu.write_internal_io(BCR0H, 0x01);
+            cpu.write_internal_io(DMODE, 0x00);
+            cpu.write_internal_io(DSTAT, 0x60);
+        }
+
+        assert_eq!(first.run(RUN_CYCLES), RUN_CYCLES);
+        assert_eq!(second.run(RUN_CYCLES), RUN_CYCLES);
+        assert_eq!(first.cycle_count(), u64::from(RUN_CYCLES));
+        assert_eq!(second.cycle_count(), u64::from(RUN_CYCLES));
+
+        let first_state = first.save_state();
+        let second_state = second.save_state();
+        let first_events = first.drain_events();
+        let second_events = second.drain_events();
+
+        assert_eq!(
+            first_events.len(),
+            1,
+            "the scripted TRAP makes the stream nonempty"
+        );
+        assert_eq!(first_state, second_state);
+        assert_eq!(first_events, second_events);
+    }
+
     #[test]
     fn prt_both_channels_tick_at_phi_divided_by_twenty_and_reload_after_zero() {
         let mut cpu = machine();

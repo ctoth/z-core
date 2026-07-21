@@ -148,6 +148,15 @@ checkpoint and restore them alongside the returned core bytes. Repeated saves
 of the same core state are byte-identical, and resuming from a snapshot uses
 the same instruction-level scheduling boundaries documented above.
 
+The Phase 6 determinism authority runs two separately constructed machines
+for exactly 10,000,000 phi cycles each. Both execute the same PRT0 reload
+loop, ASCI0 transmit and receive frames, and a 256-byte DMA0 cycle-steal copy.
+A single real undefined DD instruction produces a nonempty TRAP event stream,
+then execution enters HALT so the two-wait memory schedule reaches the exact
+cycle boundary. The DMA physical pages stay outside the CPU's identity-mapped
+logical 64 KiB, preventing transfer data from becoming accidental code. The
+test requires byte-identical state payloads and identical drained events.
+
 ## Intentional approximations
 
 ### Bus phases

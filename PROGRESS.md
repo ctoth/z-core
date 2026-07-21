@@ -2076,6 +2076,90 @@ The formatting check completed with no output. P6.7 is complete pending its
 task commit, push, and CI. P6.8's exact 10-million-cycle determinism authority
 is next only after P6.7 lands. Gate G6 remains open.
 
+### P6.8 — 10-million-cycle determinism (2026-07-21)
+
+The determinism authority constructs two independent one-MiB machines and
+applies the same real input sequence to both: a repeating PRT0 timer, ASCI0
+transmit and receive traffic, and a 256-byte DMA0 cycle-steal copy between
+physical pages outside the CPU's identity-mapped logical 64 KiB. An undefined
+DD 76 instruction spanning FFFFh/0000h emits one real TRAP event before 76h
+executes as HALT. With two memory waits, every remaining CPU/DMA boundary is a
+five-cycle multiple, so both `run(10_000_000)` calls consume exactly—not at
+least—10,000,000 phi cycles.
+
+The test directly requires both cycle counters to equal 10,000,000, the event
+stream to be nonempty, the versioned `save_state()` byte vectors to match, and
+the drained event vectors to match. DMA data is never executed as code, so the
+script measures deterministic peripheral scheduling rather than accidental
+opcode behavior.
+
+The Gate G6 combined SST line still named a bare `z180-cli` executable even
+though Gate G5 had already proven none is installed in the checkout. Its
+command spelling was corrected to the established pair of ordered
+`cargo run -p z180-cli -- ...` invocations; no gate scope or outcome changed.
+
+Exact P6.8 and Gate G6 authorities:
+
+```text
+> cargo test -p z180-core --features state determinism_timer_asci_dma_matches_after_ten_million_cycles -- --nocapture
+running 1 test
+test tests::determinism_timer_asci_dma_matches_after_ten_million_cycles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.63s
+
+> cargo test -p z180-core
+running 71 tests
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 && cargo run -p z180-cli -- sst --dir tests/z180-sst
+SUMMARY pass=697000 fail=0 unimplemented=0 excluded=907
+SUMMARY pass=7050 fail=0 unimplemented=0 excluded=0
+```
+
+P6.8 and Gate G6 have passing functional evidence. Phase 6 is complete pending
+the task's final static gates, commit, push, and CI; Phase 7 must not begin
+before that landing completes.
+
+Final integrated and static authorities:
+
+```text
+> cargo test -p z180-core --features state
+running 74 tests
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+running 71 tests
+test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.83s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.94s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. Phase 6 and Gate G6 are
+complete pending only the P6.8 commit, push, and exact CI completion.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential

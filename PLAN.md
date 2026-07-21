@@ -787,8 +787,8 @@ descriptions; one task per peripheral, in this order):
 
 **GATE G6:** `cargo test -p z180-core` full suite green (paste count);
 determinism test output pasted; all earlier suites re-run green (single
-command: `z180-cli sst --dir tests/sst/v1 && z180-cli sst --dir
-tests/z180-sst`).
+command: `cargo run -p z180-cli -- sst --dir tests/sst/v1 && cargo run -p
+z180-cli -- sst --dir tests/z180-sst`).
 
 ### Phase 7 — Debug, trace, save-state, disassembler
 
