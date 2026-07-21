@@ -290,7 +290,7 @@ The format check completed successfully with no output. Unit regressions cover
 generated instruction/MMU schema dispatch, all-page MMU validation, scripted
 read/write ordering, first-difference reporting, and per-case flag masks.
 
-### BLOCKED: Gate G1 remote CI has not run (2026-07-20)
+### Gate G1 — PASS (2026-07-20)
 
 The exact normal SST gate produced:
 
@@ -491,16 +491,33 @@ test result: ok. 8 passed; 0 failed; 0 ignored
 Doc-tests z180_core: 0 passed; 0 failed
 ```
 
-The four executable local requirements and the exact local CI command set are
-green. The named artifact `CI green on the submodule checkout` is not yet
-available: the workflow correction and G1 record are local and unpushed, so no
-GitHub Actions run can include them. A local command sequence is not a
-substitute for an actual green CI run.
+Q authorized repository creation and push. Public repository
+`https://github.com/ctoth/z-core` now tracks committed `master`. Q then
+required the checkout action update; official upstream release `v7.0.1` was
+verified and committed as `13e9d51` while retaining `submodules: true`.
 
-Required from Q: authorize pushing the committed branch so GitHub Actions can
-run, or explicitly revise G1 to accept the pasted local workflow-equivalent
-authority. Phase 2 has not started, and no CPU behavior beyond the authorized
-stub subset was added.
+GitHub Actions run `29803089336` on that exact commit is green:
+
+```text
+✓ master CI · 29803089336
+✓ ubuntu-latest in 39s
+  ✓ Run actions/checkout@v7.0.1
+  ✓ Install Rust components
+  ✓ Check formatting
+  ✓ Run Clippy
+  ✓ Run tests
+✓ windows-latest in 1m13s
+  ✓ Run actions/checkout@v7.0.1
+  ✓ Install Rust components
+  ✓ Check formatting
+  ✓ Run Clippy
+  ✓ Run tests
+```
+
+Run: https://github.com/ctoth/z-core/actions/runs/29803089336
+
+All five G1 requirements are green. Phase 1 is complete; no CPU behavior
+beyond the authorized stub subset was added.
 
 ## Phase 2 — Full unprefixed opcode page
 
