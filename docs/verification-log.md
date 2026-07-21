@@ -32,6 +32,7 @@
 | IEF1 and IEF2 reset to 0 | Interrupt Sources During RESET, p. 83 | 2026-07-20 |
 | DD/FD are defined only where Table 48 substitutes IX/IY for an HL or (HL) operand; JP (HL) is substituted, prefixed EX DE,HL is illegal, and every other DD/FD second opcode is undefined rather than prefix-ignored and therefore generates TRAP | Op Code Map, Table 48 notes, pp. 247–248; TRAP Interrupt and Figure 32, pp. 70–71 | 2026-07-20 |
 | CB opcodes 30h–37h have no defined SLL operation on Z80180 | Op Code Map, Table 49, p. 249 | 2026-07-20 |
+| DDCB/FDCB apply Table 48's (HL) substitution only to Table 49's g=(HL) cells, so documented final opcodes have low bits 110 and operate on (IX/IY+d); register-result forms and SLL are undefined and generate TRAP | Op Code Map, Table 48 Note 3 and Table 49 Note 1, pp. 248–249; TRAP Interrupt and Figure 33, pp. 70–72 | 2026-07-20 |
 | The defined ED opcode set is exactly the populated cells in the Z80180 ED map; blank ED cells are undefined | Op Code Map, Table 50, p. 250; TRAP Interrupt, pp. 70–72 | 2026-07-20 |
 | An undefined first, second, or third opcode fetch invokes TRAP; UFO distinguishes second/third-opcode cases | TRAP Interrupt and Figures 32–33, pp. 70–72 | 2026-07-20 |
 | IN0 includes ED30 as the `g=110` flags-only form; ED00/08/10/18/20/28/38 load B/C/D/E/H/L/A, while OUT0 has only the seven register forms and ED31 is not documented | I/O Instructions, Table 46, pp. 231–232; ED op-code map, Table 50, p. 250 | 2026-07-20 |

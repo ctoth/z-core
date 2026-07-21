@@ -595,11 +595,65 @@ const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
     table
 }
 
+const fn build_index_cb_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
+    let mut table = [Opcode::UNIMPLEMENTED; 256];
+
+    let mut operation = 0_usize;
+    while operation < 8 {
+        if operation != 6 {
+            let opcode = operation * 8 + 6;
+            let mnemonic = match operation {
+                0 => "RLC ({index}+{d})",
+                1 => "RRC ({index}+{d})",
+                2 => "RL ({index}+{d})",
+                3 => "RR ({index}+{d})",
+                4 => "SLA ({index}+{d})",
+                5 => "SRA ({index}+{d})",
+                _ => "SRL ({index}+{d})",
+            };
+            table[opcode] = Opcode::implemented(
+                mnemonic,
+                [OperandKind::IndirectIndex, OperandKind::None],
+                4,
+                Z180::<B>::execute_index_cb::<IY>,
+            );
+        }
+        operation += 1;
+    }
+
+    let mut bit = 0_usize;
+    while bit < 8 {
+        table[0x46 + bit * 8] = Opcode::implemented(
+            "BIT {bit},({index}+{d})",
+            [OperandKind::Bit, OperandKind::IndirectIndex],
+            4,
+            Z180::<B>::execute_index_cb::<IY>,
+        );
+        table[0x86 + bit * 8] = Opcode::implemented(
+            "RES {bit},({index}+{d})",
+            [OperandKind::Bit, OperandKind::IndirectIndex],
+            4,
+            Z180::<B>::execute_index_cb::<IY>,
+        );
+        table[0xc6 + bit * 8] = Opcode::implemented(
+            "SET {bit},({index}+{d})",
+            [OperandKind::Bit, OperandKind::IndirectIndex],
+            4,
+            Z180::<B>::execute_index_cb::<IY>,
+        );
+        bit += 1;
+    }
+
+    table
+}
+
 impl<B: HostBus> Z180<B> {
     pub(crate) const MAIN_OPCODES: [Opcode<B>; 256] = build_main_table::<B>();
     pub(crate) const CB_OPCODES: [Opcode<B>; 256] = build_cb_table::<B>();
     pub(crate) const DD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, false>();
     pub(crate) const FD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, true>();
+    pub(crate) const DDCB_OPCODES: [Opcode<B>; 256] = build_index_cb_table::<B, false>();
+    pub(crate) const FDCB_OPCODES: [Opcode<B>; 256] = build_index_cb_table::<B, true>();
 }
 
 #[cfg(test)]
@@ -708,6 +762,22 @@ mod tests {
                             | 0xf9
                 );
                 assert_eq!(entry.handler.is_some(), expected, "{opcode:02x}");
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_cb_tables_contain_only_documented_memory_forms() {
+        for table in [
+            &Z180::<NullBus>::DDCB_OPCODES,
+            &Z180::<NullBus>::FDCB_OPCODES,
+        ] {
+            for (opcode, entry) in table.iter().enumerate() {
+                let expected = opcode & 0x07 == 6 && !(0x30..=0x37).contains(&opcode);
+                assert_eq!(entry.handler.is_some(), expected, "{opcode:02x}");
+                if expected {
+                    assert_eq!(entry.length, 4, "{opcode:02x}");
+                }
             }
         }
     }

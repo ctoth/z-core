@@ -779,6 +779,57 @@ Doc-tests z180_core: 0 passed; 0 failed
 The format check completed successfully with no output. Phase 3 task 3 is the
 next unchecked plan item.
 
+### P3.3 — Documented DDCB/FDCB pages (2026-07-20)
+
+Direct UM0050 inspection links Table 48 Note 3's `(HL)` to `(IX/IY+d)`
+substitution with the `g=(HL)` cells marked in Table 49. The documented
+DDCB/FDCB final bytes therefore have low bits `110` and operate only on
+indexed memory: seven rotate/shift forms excluding SLL, eight BIT, eight RES,
+and eight SET per prefix. Register-result forms and SLL are undefined and
+remain without handlers for P3.5 TRAP.
+
+Dedicated DDCB/FDCB metadata tables contain exactly those 31 forms per prefix.
+Four-byte decode reads DD/FD, CB, the signed displacement, and the final
+opcode, advances PC by four, increments R for the two opcode-fetch M1 cycles,
+and executes against `(IX/IY+d)`.
+
+The first focused run reported all nine files UNIMPLEMENTED because the core's
+implementation query expected the displacement as an opcode byte. The SST
+parser's established representation correctly omits operand placeholders.
+Changing the query identity from four bytes to `[DD/FD, CB, final]` activated
+the existing execution path; no instruction semantics changed in that
+correction.
+
+External corpus results after the correction:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only "dd cb __ 06,fd cb __ 1e,dd cb __ 3e,fd cb __ 46,dd cb __ 7e,fd cb __ 86,dd cb __ be,fd cb __ c6,dd cb __ fe"
+SUMMARY pass=9000 fail=0 unimplemented=0 excluded=0
+
+> cargo run -p z180-cli -- sst --dir tests/sst/v1
+SUMMARY pass=640000 fail=0 unimplemented=65000 excluded=899
+```
+
+All 62 documented DDCB/FDCB files pass all 62,000 cases. The 65 remaining
+UNIMPLEMENTED files are the P3.4 ED surface only.
+
+The workspace quality authorities passed:
+
+```text
+> cargo test --workspace
+z180-cli: 12 passed; 0 failed
+z180-core: 16 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.62s
+
+> cargo fmt --check
+```
+
+The format check completed successfully with no output. Phase 3 task 4 is the
+next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window
