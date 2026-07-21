@@ -1573,6 +1573,67 @@ The format check completed with no output. P5.4, the complete unit-test matrix
 and MMU/ICR boundary regressions, is the next unchecked task; Gate G5 remains
 pending until P5.4 is complete.
 
+### P5.4 — Phase 5 boundary test matrix (2026-07-21)
+
+The interrupt dispatch matrix exercises all 11 `IrqSource` variants across
+enabled and disabled source conditions and both IFF1 states, for 44 explicit
+combinations. It verifies service/no-service decisions, vectors, cycle totals,
+stacked PCs, and IFF results. External lines prove ITC gating while asserted;
+internal cases represent the presence or absence of a qualified Phase 6
+peripheral request.
+
+The fixed MMU cases cover BA=CA, BA=0, CA=F, and 20-bit wrap at 1 MiB for both
+CBR and BBR relocation. The ICR round-trip uses ordinary OUT0 instructions to
+move the internal window from 00h–3Fh to 40h–7Fh and back, then proves the
+active/inactive addresses and exact duplicate bus writes.
+
+Focused P5.4 authorities:
+
+```text
+> cargo test -p z180-core interrupts_vector_dispatch_matrix -- --nocapture
+running 1 test
+test tests::interrupts_vector_dispatch_matrix_covers_every_source_gate_and_iff_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.01s
+
+> cargo test -p z180-core mmu_boundary_cases -- --nocapture
+running 1 test
+test tests::mmu_boundary_cases_cover_empty_regions_and_one_mibibyte_wrap ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.00s
+
+> cargo test -p z180-core ioregs_icr_relocation_round_trip -- --nocapture
+running 1 test
+test tests::ioregs_icr_relocation_round_trip_uses_each_active_window ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 41 filtered out; finished in 0.00s
+```
+
+Final workspace authority:
+
+```text
+> cargo test --workspace
+running 17 tests
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+running 42 tests
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s
+
+> cargo fmt --all -- --check
+```
+
+The format check completed with no output. All four Phase 5 tasks are now
+implemented; Gate G5 is the next unchecked plan item.
+
 ## Phase 6 — On-chip peripherals
 
 ## Phase 7 — Debug, trace, save-state, disassembler

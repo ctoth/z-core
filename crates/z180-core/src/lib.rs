@@ -1894,6 +1894,38 @@ mod tests {
         assert_eq!(cpu.mem_peek(0x3000), 0x00);
     }
 
+    #[test]
+    fn mmu_boundary_cases_cover_empty_regions_and_one_mibibyte_wrap() {
+        let mut cpu = mmu_machine();
+        cpu.write_internal_io(CBR, 0x20);
+        cpu.write_internal_io(BBR, 0x40);
+
+        cpu.write_internal_io(CBAR, 0x88);
+        assert_eq!(cpu.mmu_translate(0x7123), 0x07123, "below BA=CA");
+        assert_eq!(cpu.mmu_translate(0x8123), 0x28123, "at BA=CA");
+
+        cpu.write_internal_io(CBAR, 0x80);
+        assert_eq!(cpu.mmu_translate(0x0123), 0x40123, "BA=0 bank base");
+        assert_eq!(cpu.mmu_translate(0x7123), 0x47123, "BA=0 bank end");
+        assert_eq!(cpu.mmu_translate(0x8123), 0x28123, "BA=0 common 1");
+
+        cpu.write_internal_io(CBAR, 0xf4);
+        assert_eq!(cpu.mmu_translate(0x3123), 0x03123, "below BA");
+        assert_eq!(cpu.mmu_translate(0x4123), 0x44123, "at BA");
+        assert_eq!(cpu.mmu_translate(0xe123), 0x4e123, "below CA=F");
+        assert_eq!(cpu.mmu_translate(0xf123), 0x2f123, "at CA=F");
+
+        cpu.write_internal_io(CBR, 0xff);
+        cpu.write_internal_io(CBAR, 0x00);
+        assert_eq!(cpu.mmu_translate(0x1123), 0x00123, "CBR wraps at 1 MiB");
+        assert_eq!(cpu.mmu_translate(0xf123), 0x0e123, "CBR wrap keeps page");
+
+        cpu.write_internal_io(BBR, 0xff);
+        cpu.write_internal_io(CBAR, 0xf0);
+        assert_eq!(cpu.mmu_translate(0x1123), 0x00123, "BBR wraps at 1 MiB");
+        assert_eq!(cpu.mmu_translate(0xe123), 0x0d123, "BBR wrap keeps page");
+    }
+
     proptest! {
         #[test]
         fn mmu_translation_array_matches_closed_form(
@@ -2031,6 +2063,46 @@ mod tests {
             "nonzero high byte is external"
         );
         assert_eq!(cpu.bus.io_writes[3], (0xa572, 0xa5));
+    }
+
+    #[test]
+    fn ioregs_icr_relocation_round_trip_uses_each_active_window() {
+        let mut cpu = recording_machine(Variant::Z80180);
+        for (address, bytes) in [
+            (0_u32, [0xed, 0x01, 0x3f]),
+            (3, [0xed, 0x01, 0x7f]),
+            (6, [0xed, 0x01, 0x32]),
+            (9, [0xed, 0x01, 0x72]),
+        ] {
+            for (offset, byte) in bytes.into_iter().enumerate() {
+                cpu.mem_poke(address + offset as u32, byte);
+            }
+        }
+
+        cpu.set_reg(Reg::BC, 0x4000);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.io_reg_peek(ICR as u8), 0x40);
+
+        cpu.set_reg(Reg::BC, 0x0000);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.io_reg_peek(ICR as u8), 0x00);
+
+        cpu.set_reg(Reg::BC, 0xa500);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0xa5);
+
+        cpu.set_reg(Reg::BC, 0x5a00);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0xa5);
+        assert_eq!(
+            cpu.bus.io_writes,
+            vec![
+                (0x003f, 0x40),
+                (0x007f, 0x00),
+                (0x0032, 0xa5),
+                (0x0072, 0x5a)
+            ]
+        );
     }
 
     #[test]
@@ -2422,6 +2494,97 @@ mod tests {
 
         assert_eq!(internal.step(), 18);
         assert_eq!(internal.reg(Reg::PC), 0x3333, "PRT1 precedes DMA0");
+    }
+
+    #[test]
+    fn interrupts_vector_dispatch_matrix_covers_every_source_gate_and_iff_state() {
+        let sources = [
+            (IrqSource::Nmi, None, 0x00, 0x00, None),
+            (IrqSource::Int0, Some(IrqLine::Int0), 0x00, 0x01, None),
+            (
+                IrqSource::Int1,
+                Some(IrqLine::Int1),
+                0x00,
+                0x02,
+                Some(0x00_u8),
+            ),
+            (IrqSource::Int2, Some(IrqLine::Int2), 0x00, 0x04, Some(0x02)),
+            (IrqSource::Prt0, None, 0x01, 0x00, Some(0x04)),
+            (IrqSource::Prt1, None, 0x02, 0x00, Some(0x06)),
+            (IrqSource::Dma0, None, 0x04, 0x00, Some(0x08)),
+            (IrqSource::Dma1, None, 0x08, 0x00, Some(0x0a)),
+            (IrqSource::Csio, None, 0x10, 0x00, Some(0x0c)),
+            (IrqSource::Asci0, None, 0x20, 0x00, Some(0x0e)),
+            (IrqSource::Asci1, None, 0x40, 0x00, Some(0x10)),
+        ];
+
+        for (source, external_line, internal_bit, itc_bit, fixed_code) in sources {
+            for enabled in [false, true] {
+                for iff1 in [false, true] {
+                    let mut cpu = machine();
+                    cpu.write_internal_io(DCNTL, 0x00);
+                    cpu.write_internal_io(IL, 0xa0);
+                    cpu.write_internal_io(ITC, if enabled { itc_bit } else { 0 });
+                    cpu.mem_poke(0x0100, 0x00);
+                    cpu.set_reg(Reg::PC, 0x0100);
+                    cpu.set_reg(Reg::SP, 0x8000);
+                    cpu.set_reg(Reg::IR, 0x2000);
+                    cpu.set_interrupt_mode(1);
+                    cpu.set_iff1(iff1);
+                    cpu.set_iff2(true);
+
+                    let expected_pc = match source {
+                        IrqSource::Nmi => 0x0066,
+                        IrqSource::Int0 => 0x0038,
+                        _ => {
+                            let code = fixed_code.expect("vectored source must have a fixed code");
+                            let vector = 0x20a0 | u16::from(code);
+                            let target = 0x4000 | u16::from(code);
+                            cpu.mem_poke(u32::from(vector), target as u8);
+                            cpu.mem_poke(u32::from(vector.wrapping_add(1)), (target >> 8) as u8);
+                            target
+                        }
+                    };
+
+                    if source == IrqSource::Nmi {
+                        cpu.set_nmi(enabled);
+                    } else if let Some(line) = external_line {
+                        cpu.set_irq(line, true);
+                    } else {
+                        cpu.internal_irq_pending = if enabled { internal_bit } else { 0 };
+                    }
+
+                    let should_service = enabled && (source == IrqSource::Nmi || iff1);
+                    let cycles = cpu.step();
+                    if should_service {
+                        let expected_cycles = match source {
+                            IrqSource::Nmi | IrqSource::Int0 => 11,
+                            _ => 18,
+                        };
+                        assert_eq!(
+                            cycles, expected_cycles,
+                            "{source:?} enabled={enabled} iff1={iff1}"
+                        );
+                        assert_eq!(cpu.reg(Reg::PC), expected_pc, "{source:?}");
+                        assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{source:?}");
+                        assert_eq!(cpu.mem_peek(0x7ffe), 0x00, "{source:?}");
+                        assert_eq!(cpu.mem_peek(0x7fff), 0x01, "{source:?}");
+                        assert!(!cpu.iff1(), "{source:?}");
+                        if source == IrqSource::Nmi {
+                            assert_eq!(cpu.iff2(), iff1, "{source:?}");
+                        } else {
+                            assert!(!cpu.iff2(), "{source:?}");
+                        }
+                    } else {
+                        assert_eq!(cycles, 3, "{source:?} enabled={enabled} iff1={iff1}");
+                        assert_eq!(cpu.reg(Reg::PC), 0x0101, "{source:?}");
+                        assert_eq!(cpu.reg(Reg::SP), 0x8000, "{source:?}");
+                        assert_eq!(cpu.iff1(), iff1, "{source:?}");
+                        assert!(cpu.iff2(), "{source:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
