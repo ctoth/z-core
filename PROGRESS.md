@@ -54,6 +54,29 @@ The original P1.2 runner depended on the machine, register file, memory, and
 the two tasks. `PLAN.md` now defines P1.2 as the stub CPU subset and P1.3 as
 the SST runner; the runner-code cross-reference in P1.7 now points to P1.3.
 
+### P1.5 oracle-binding blocker — RESOLVED (2026-07-20)
+
+The named existing qns CFFI surface at `C:\Users\Q\code\qns` is present, but
+`qns.cpu.Z180` and its CFFI declarations expose only `qns_z180_get_reg`, IRQ
+control, PC/halt, MMU getters, and unrelated diagnostics. They expose no CPU
+register setter and no complete snapshot access for the alternate register
+bank, I/R, IFF1/IFF2, IM, or ITC.
+
+P1.5 requires seeded randomized full initial states and recording the complete
+post-instruction SST state, including TRAP ITC. That cannot be done through the
+exact named binding. A bootstrap/epilogue reconstruction would substitute a
+different workflow and would not provide an actual complete one-instruction
+snapshot. Required from Q: authorize and provide the exact missing qns oracle
+state-load/state-capture mechanism, or revise P1.5 to name another exact
+mechanism.
+
+Q explicitly authorized replacing the unavailable incumbent-oracle dependency
+with an independent first-party reference model derived only from verified
+UM0050 facts. `PLAN.md` now defines `tools/reference/`, deterministic
+reference-generated Z180 instruction/TRAP/MMU cases, generator determinism and
+schema gates, and optional non-gating incumbent comparisons only if a complete
+black-box state API later exists. No emulator source access is authorized.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
@@ -66,7 +89,7 @@ the SST runner; the runner-code cross-reference in P1.7 now points to P1.3.
 
 ## Phase 7 — Debug, trace, save-state, disassembler
 
-## Phase 8 — Python binding, qns migration, lockstep
+## Phase 8 — Python binding, qns migration, reference differential
 
 ## Phase 9 — WASM and TypeScript
 

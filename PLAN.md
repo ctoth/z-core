@@ -27,7 +27,9 @@ These rules override your defaults. Violating any of them is a failed task.
 3. **Clean room.** You must NEVER open, read, or copy from the source code of
    any existing emulator: MAME, z180emu (`C:\Users\Q\src\z180emu`), redcode/Z80,
    Ares, FUSE, or any other. Not "for reference", not "just the tables".
-   Oracles are used strictly as black boxes (run them, observe outputs).
+   Existing-emulator oracles are used strictly as black boxes (run them,
+   observe outputs). First-party reference functions authored solely from
+   UM0050 are allowed and must not call or copy any emulator implementation.
    Exception: the `qns` Python codebase is NOT an emulator core and may be read
    freely. Violation of this rule poisons the licensing story of the whole
    project.
@@ -70,7 +72,7 @@ These rules override your defaults. Violating any of them is a failed task.
     `serde`, `serde_json`, `anyhow`; `z180-py`: `pyo3`; `z180-wasm`:
     `wasm-bindgen`, `js-sys`, `serde-wasm-bindgen`. Dev-deps for tests:
     `proptest` (Rust), `hypothesis` + `pytest` (Python tooling in
-    `tools/oracle/` and z180-py tests). Anything else requires a
+    `tools/reference/` and z180-py tests). Anything else requires a
     `PROPOSAL:` note and Q's approval.
 11. **Determinism is a feature.** Same config + same inputs + same call
     sequence must produce bit-identical state and event streams on every
@@ -137,7 +139,7 @@ z-core/
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
 ├── README.md
-├── PLAN.md               # this file (do not edit; PROGRESS.md is yours)
+├── PLAN.md               # controlling plan; edit only with Q's explicit authorization
 ├── PROGRESS.md           # per-phase log, gate outputs, BLOCKED/PROPOSAL notes
 ├── docs/
 │   ├── vendor/           # UM0050 PDF and any other datasheets (gitignored if large)
@@ -152,11 +154,11 @@ z-core/
 │   └── z180-wasm/        # wasm-bindgen bindings + TS types
 ├── tests/
 │   ├── sst/              # git submodule: SingleStepTests/z80 (JSON tests)
-│   ├── z180-sst/         # OUR generated Z180 single-step JSON tests (P8)
+│   ├── z180-sst/         # OUR generated Z180 single-step JSON tests (P1)
 │   └── vendor/           # zexdoc.com etc. + NOTICES.md
 └── tools/
-    └── oracle/           # Python scripts that drive qns's existing z180emu
-                          # binding as a black-box oracle (P8)
+    └── reference/        # independent UM0050-derived Python specification,
+                          # corpus generator, and Hypothesis strategies
 ```
 
 ### 2.2 Core data model (crate `z180-core`)
@@ -382,7 +384,7 @@ All on the ED page:
 
 Flag effects: take from the UM0050 instruction descriptions, not from memory
 and not from this table. The external Z80 suites cannot cover these — their
-tests come from the oracle-generated suite (Phase 1) plus hand-written unit
+tests come from the reference-generated suite (Phase 1) plus hand-written unit
 tests per family.
 
 ### 3.6 Internal I/O register map (base 0x00; relocatable via ICR)
@@ -543,39 +545,71 @@ Tasks:
    Prove: without the flag, the LD/NOP/HALT SST files pass; with the flag,
    they fail. This demonstrates the harness detects wrongness. Keep the flag
    (it is rerun at every phase gate as a self-check).
-5. **Oracle harness.** In `tools/oracle/` (Python, run with `uv`), drive the
-   EXISTING qns CFFI binding (`qns._z180_cffi` via `qns.cpu.Z180` from
-   `C:\Users\Q\code\qns`) as a black box to GENERATE our Z180-specific
-   single-step suite into `tests/z180-sst/` (same JSON schema as SST):
+5. **UM0050 reference corpus.** In `tools/reference/` (Python, run with
+   `uv`), implement small first-party state-transition functions derived
+   directly from the verified UM0050 rules and use them to GENERATE our
+   Z180-specific single-step suite into `tests/z180-sst/` (Appendix C):
    - For every Z180-added opcode (3.5): ≥ 200 cases each of randomized
      (seeded, seed recorded in the file) register/memory initial states →
-     run 1 instruction → record final state.
+     apply exactly one independent reference transition → record final
+     state. I/O instructions also record deterministic port reads/writes in
+     the SST `ports` format so their externally visible behavior is tested.
+     Phase 1 I/O strategies select ports outside the reset-state 64-byte
+     internal window; internal-register behavior belongs to Phase 5.
    - TRAP cases: a representative sample (≥ 50) of undefined opcodes across
-     pages (Appendix A list), recording post-trap PC, stack contents, ITC.
+     pages (Appendix A list), with reference-computed post-trap PC, stack
+     contents, and ITC.
    - MMU cases: ≥ 200 randomized CBR/BBR/CBAR programs, each followed by
-     reads through all 16 logical 4K pages, recording effective physical
-     addresses (observable via which RAM byte is returned).
-   The oracle is not gospel: where an oracle result contradicts UM0050
-   during later phases, the UM wins — record the conflict and the resolution
-   in verification-log.md and annotate the affected JSON cases with
-   `"disputed": true` plus a comment field citing the UM section.
-   NOTE (licensing): generated test data records facts about Z180 behavior;
-   the GPL oracle binary is only executed, never linked or read (rule 0.3).
-   Implementation detail: state generation uses **Hypothesis strategies**
-   defined once in `tools/oracle/strategies.py` (register values, flag
-   bytes, MMU register triples, memory patterns, instruction encodings from
-   the optable's own metadata). Corpus files are then emitted via
-   `@settings(derandomize=True)` + explicit seeds so regeneration is
-   deterministic. The same strategies module is reused verbatim by the
-   Phase 8 differential fuzzer — one vocabulary of "interesting states"
-   for the whole project.
-5b. **Oracle self-consistency check** (Hypothesis, runs now, no z-core
-   needed): property — constructing the oracle twice with the same initial
-   state and running the same instruction yields identical final state.
-   ≥ 1000 examples. This validates the oracle harness plumbing (callback
-   wiring, state capture) before its outputs are enshrined as tests, and
-   catches nondeterminism in the incumbent that would poison the corpus.
-   Any nondeterminism found: BLOCKED, report to Q with the shrunk example.
+     reads through all 16 logical 4K pages, with effective physical
+     addresses computed from the verified closed-form rule in 3.3
+     (observable via which RAM byte is returned).
+   Reference code must not import, call, or copy z-core or any existing
+   emulator. Every transition rule and numeric constant must cite a row in
+   `docs/verification-log.md`; UM0050 wins over the plan and reference code.
+   If a later optional black-box comparison disagrees, annotate the affected
+   JSON case with `"disputed": true` plus a `dispute_note` citing the UM
+   section and record the adjudication in `verification-log.md`.
+   Implementation detail: define the Phase 1 instruction encodings and pure
+   transitions once in `tools/reference/spec.py`; the Rust optable does not
+   exist until Phase 2 and therefore cannot be a Phase 1 input. State
+   generation uses **Hypothesis strategies** defined once in
+   `tools/reference/strategies.py` (register values, flag bytes, MMU register
+   triples, memory patterns, and instruction encodings from `spec.py`).
+   Create `tools/reference/pyproject.toml`,
+   `tools/reference/.python-version`, and `tools/reference/uv.lock` with only
+   the allowed `hypothesis` and `pytest` dependencies, plus
+   `generate.py` as the re-runnable corpus entrypoint. Generate the checked-in
+   corpus with exactly:
+
+   ```text
+   uv run --project tools/reference python tools/reference/generate.py --out tests/z180-sst
+   ```
+
+   Corpus files are emitted via `@settings(derandomize=True)` plus explicit
+   seeds with Python and dependency versions pinned by `uv.lock`. The same
+   strategies are reused by the Phase 8 reference differential properties —
+   one vocabulary of "interesting states" for the whole project.
+5b. **Reference-generator self-consistency and schema check** (Hypothesis,
+   runs now, no z-core needed). Create
+   `tools/reference/test_reference.py` for these checks:
+   - Property: applying the same reference transition twice to identical
+     initial state and instruction inputs yields identical final state and
+     I/O events for ≥ 1000 examples.
+   - Generate the complete corpus twice into separate temporary directories
+     and require byte-identical directory trees.
+   - Validate every case against Appendix C, every opcode file at ≥ 200
+     cases, TRAP at ≥ 50 cases, and MMU at ≥ 200 cases.
+   Run exactly:
+
+   ```text
+   uv run --project tools/reference pytest tools/reference
+   uv run --project tools/reference python tools/reference/generate.py --check tests/z180-sst
+   ```
+
+   The latter regenerates into a temporary directory, validates schema/counts,
+   and compares every relative path byte-for-byte.
+   Any nondeterminism, schema failure, or count failure: BLOCKED, report to Q
+   with the shrunk example or exact differing path.
 6. **ZEX assets + harness skeleton.** Vendor `zexdoc.com` (CP/M binary) into
    `tests/vendor/zex/` with NOTICES.md (source URL + GPL notice). If no
    trustworthy source is found, BLOCKED — ask Q. Build `z180-cli zex
@@ -586,14 +620,17 @@ Tasks:
    will hit UNIMPLEMENTED opcodes; the harness must report that cleanly, not
    crash).
 7. **z180-sst runner mode**: `z180-cli sst --dir tests/z180-sst` shares all
-   runner code with task 3.
+   runner code with task 3, loads the Appendix C `z180` state, supplies the
+   recorded deterministic port reads, compares port writes, dispatches
+   `instruction`/`trap`/`mmu` case kinds (including all 16 MMU probes), and
+   adds a `--census` report of case counts per opcode and special family.
 
 **GATE G1** (all pasted):
 - `z180-cli sst --dir tests/sst/v1 --only 00,76,40..7f` → PASS for all
   implemented-opcode files, UNIMPLEMENTED (not FAIL) elsewhere.
 - Same command with `--sabotage-ld` → FAILs reported on LD files.
-- `tests/z180-sst/` populated; case counts per opcode printed by a
-  `z180-cli sst --dir tests/z180-sst --census` subcommand; all currently
+- `tests/z180-sst/` populated; case counts per opcode plus TRAP/MMU family
+  printed by `z180-cli sst --dir tests/z180-sst --census`; all currently
   UNIMPLEMENTED.
 - `z180-cli zex tests/vendor/zex/zexdoc.com` terminates with a clean
   "unimplemented opcode at PC=xxxx" report.
@@ -625,7 +662,7 @@ Tasks:
 2. DD/FD pages: documented IX/IY forms only; every undocumented DD/FD
    combination follows the UM's rule for undefined operation (verify: some
    act as if the prefix were absent vs trap — encode exactly what the UM
-   says, and capture the oracle's answer in z180-sst as cross-evidence).
+   says, and cover the verified result in the reference-generated corpus).
 3. DDCB/FDCB: documented displacement forms only; undocumented → per UM.
 4. ED page: Z80 documented ED ops (LDIR family, IN/OUT (C), ADC/SBC HL,
    RETI/RETN, IM x, LD I/A etc.) + all Z180 additions from 3.5. ED holes →
@@ -637,7 +674,8 @@ Tasks:
 - `z180-cli sst --dir tests/sst/v1` → all documented files PASS, zero FAIL,
   zero UNIMPLEMENTED (excluded undocumented files listed by name in the
   report, count matching Appendix A policy).
-- `z180-cli sst --dir tests/z180-sst` → 100% PASS on Z180-op and TRAP
+- `z180-cli sst --dir tests/z180-sst` → 100% PASS on reference-generated
+  Z180-op and TRAP
   suites (MMU suite may remain UNIMPLEMENTED until Phase 5; the report must
   show it as such).
 - Unit tests: `cargo test -p z180-core trap` green.
@@ -728,7 +766,7 @@ Tasks:
 **GATE G7:** `cargo test --workspace` green; disassembler golden test
 green; a save/load/resume demonstration transcript pasted.
 
-### Phase 8 — Python binding + qns migration + lockstep
+### Phase 8 — Python binding + qns migration + reference differential
 
 Tasks:
 1. `crates/z180-py`: PyO3 + maturin, abi3 wheel, module name `z180`.
@@ -748,44 +786,49 @@ Tasks:
 4. Benchmark: `python bench.py` — cycles/sec for (a) compat callback mode,
    (b) internal-memory mode; and the same loop on the old CFFI binding for
    comparison. Record all three numbers.
-5. **Lockstep differential vs the incumbent:** script
-   `tools/oracle/lockstep.py` running the BNS ROM boot on BOTH the old qns
-   binding and z180-py with the same qns-derived machine wiring, comparing
-   (instruction_pc, AF, BC, DE, HL, SP) instruction-by-instruction for the
-   first 10 million instructions. On divergence: dump both states + the
-   disassembly around the PC and stop. Every divergence must be adjudicated
-   with a UM citation (who is right and why) in verification-log.md;
-   z-core-wrong ⇒ fix and rerun from zero.
-6. **Hypothesis differential fuzzer** — `tools/oracle/test_differential.py`
-   (pytest + Hypothesis, reusing `strategies.py` from Phase 1):
-   - Property A (single instruction): for any documented-or-Z180 opcode and
-     any generated initial state, z-core and the oracle produce identical
-     final state (registers, touched memory, F masked per 3.1.4).
+5. **Optional incumbent lockstep:** only if the old qns binding exposes a
+   genuine black-box API that can load and capture the complete compared
+   state, `tools/reference/incumbent_lockstep.py` may run the BNS ROM boot on
+   BOTH bindings with identical qns-derived wiring. Compare
+   `(instruction_pc, AF, BC, DE, HL, SP)` for the first 10 million
+   instructions. On divergence: dump both states + disassembly around PC and
+   adjudicate with UM citations in `verification-log.md`; z-core-wrong ⇒ fix
+   and rerun from zero. If that full-state API is absent, record
+   `NOT RUN: no authorized full-state black-box API` in PROGRESS.md. This
+   optional task is not a gate and never authorizes reading emulator source.
+6. **Hypothesis reference differential fuzzer** —
+   `tools/reference/test_differential.py` (pytest + Hypothesis, reusing
+   `strategies.py` from Phase 1):
+   - Property A (single instruction): for any Z180-added opcode and generated
+     initial state, z-core and the independent UM0050 transition produce
+     identical final state, touched memory, and I/O events (F masked per
+     3.1.4). Shared Z80 instructions remain covered by SST.
    - Property B (short sequences): for any generated sequence of up to 32
-     instructions (valid encodings drawn from the optable, branches allowed
-     within a 4K arena, HALT excluded), final states match instruction-by-
-     instruction in lockstep.
-   - Property C (MMU): for any CBR/BBR/CBAR program followed by generated
-     memory accesses across all 16 logical pages, observed physical effects
-     match — and additionally match the closed-form 3.3 formula (three-way
-     agreement: z-core ≡ oracle ≡ formula).
-   - Every failure Hypothesis finds is SHRUNK automatically; the worker
-     pins the shrunk case as a permanent `@example(...)` regression AND
-     exports it as a `disputed`-or-fixed JSON case into `tests/z180-sst/`
-     before fixing. Adjudication rule as in task 5: UM wins over both
-     implementations; oracle-wrong cases are recorded, not "fixed" toward.
+     reference-modeled Z180 instructions in a 4K arena (HALT/SLP excluded),
+     final states match instruction-by-instruction.
+   - Property C (TRAP/MMU): undefined-opcode transitions and randomized
+     CBR/BBR/CBAR accesses across all 16 logical pages match the independent
+     reference; MMU effects also match the closed-form 3.3 formula.
+   - If the optional incumbent API is available, add it as a third comparison
+     leg. A disagreement is adjudicated against UM0050; it never changes the
+     mandatory two-way reference gate or licenses emulator-source access.
+   - Every failure Hypothesis finds is SHRUNK automatically; the worker pins
+     the shrunk case as a permanent `@example(...)` regression AND exports it
+     as a `disputed`-or-fixed JSON case into `tests/z180-sst/` before fixing.
+     UM wins over both first-party implementations.
    - The Hypothesis example database (`.hypothesis/`) is committed under
-     `tools/oracle/` so CI reuses discovered edge cases forever.
+     `tools/reference/` so CI reuses discovered edge cases forever.
    - Budget: `--hypothesis-profile=gate` = 2,000 examples per property for
      the G8 gate; a `nightly` profile with 50,000 examples is defined for
      ongoing CI use.
 
 **GATE G8:** paste — `uv run pytest` for z180-py tests on Windows green;
-benchmark table (must meet 1.3 targets); differential fuzzer: all three
-properties pass at the `gate` profile with zero surviving counterexamples
-(pinned regressions listed by name); lockstep run summary: either
-"10,000,000 instructions, zero divergence" or the adjudication list with
-every entry resolved in z-core's favor with UM citations.
+benchmark table (must meet 1.3 targets); reference differential fuzzer: all
+three properties pass at the `gate` profile with zero surviving
+counterexamples (pinned regressions listed by name). Record the optional
+incumbent status as either its completed/adjudicated summary or exactly
+`NOT RUN: no authorized full-state black-box API`; that status is
+informational and does not weaken or replace the mandatory reference gate.
 
 ### Phase 9 — WASM + TypeScript
 
@@ -841,7 +884,7 @@ instruction set chapter before encoding):
 - DD/FD pages: only the documented IX/IY instruction forms are defined. For
   every other following byte, implement exactly what UM0050 specifies for
   undefined prefix sequences (trap vs prefix-ignored — DO NOT GUESS; verify,
-  and cross-check the oracle's z180-sst recordings).
+  and cover the verified behavior in the reference-generated z180-sst cases).
 - DDCB/FDCB: only the documented displacement forms; others per UM.
 
 SST exclusion rule (Phase 1 runner): exclude a test file if and only if its
@@ -857,26 +900,50 @@ PROGRESS.md at each gate.
 | SingleStepTests Z80 JSON | github.com/SingleStepTests/z80 | tests/sst (submodule) | Pin commit hash |
 | zexdoc.com | ask Q if no trustworthy mirror; commonly redistributed with Z80 emulator projects | tests/vendor/zex/ | GPL notice in NOTICES.md; executed, never linked |
 | BNS ROMs | C:\Users\Q\code\qns\roms\ | not copied here | used only via qns in Phase 8 |
-| Oracle (incumbent emulator) | qns's built `_z180_cffi` extension | not copied here | black box only (rule 0.3) |
+| Independent reference model | verified UM0050 facts | tools/reference/ | first-party specification code; never imports z-core or emulator code |
+| Optional incumbent comparison | qns's built `_z180_cffi` extension | not copied here | non-gating; black box only and only when a complete state API exists |
 
 ## Appendix C — z180-sst JSON format
 
-Same shape as SingleStepTests Z80 v1 (fields `name`, `initial`, `final`
-with `pc,sp,a,b,c,d,e,f,h,l,i,r,ix,iy,af_,bc_,de_,hl_,iff1,iff2,im,ram`),
-minus the `cycles`/`ports` bus arrays, plus:
+Instruction and TRAP cases use the SingleStepTests Z80 v1 shape: `name`,
+`initial`, and `final`, with
+`pc,sp,a,b,c,d,e,f,h,l,i,r,ix,iy,af_,bc_,de_,hl_,iff1,iff2,im,ram`.
+They omit `cycles` but retain the standard ordered `ports` events
+`[address, value, "r"|"w"]`; read events provide deterministic HostBus
+inputs and write events are expected outputs. Each case additionally has:
 
 ```json
 {
+  "kind": "instruction",
   "seed": 12345,
   "disputed": false,
-  "dispute_note": "",
-  "z180": { "itc": 0, "cbr": 0, "bbr": 0, "cbar": 240 }
+  "dispute_note": ""
 }
 ```
 
-`z180.*` fields appear in both `initial` and `final` for TRAP and MMU
-suites. Generator scripts live in `tools/oracle/` and must be re-runnable
-(seeded) so the suite can be regenerated and extended deterministically.
+`kind` is `instruction` for opcode cases and `trap` for undefined-opcode
+cases. Every generated case adds
+`"z180": {"itc": 0, "cbr": 0, "bbr": 0, "cbar": 240,
+"sleeping": false}` to both `initial` and `final`; this makes SLP state and
+TRAP/MMU control state observable.
+
+MMU cases use `kind: "mmu"`, the same common metadata and initial/final state,
+`z180` in both states, and exactly 16 ordered probes:
+
+```json
+{
+  "kind": "mmu",
+  "mmu_probes": [
+    {"logical": 0, "expected_physical": 0, "value": 17}
+  ]
+}
+```
+
+Each MMU probe's logical address belongs to a distinct logical 4K page; the
+test harness places `value` at `expected_physical`, performs the logical read,
+and requires that value. Generator scripts live in `tools/reference/` and
+must be re-runnable with pinned explicit seeds so the suite can be regenerated
+and extended deterministically.
 
 ## Appendix D — qns compat surface (Phase 8 checklist)
 
@@ -910,7 +977,7 @@ After each phase the reviewer checks, in order:
 
 Two engines, two layers. Rust `proptest` tests live inside `z180-core` and
 run at every `cargo test` from the phase that introduces them. Python
-`hypothesis` tests live in `tools/oracle/` + z180-py and come alive in
+`hypothesis` tests live in `tools/reference/` + z180-py and come alive in
 Phase 8 (strategies authored in Phase 1). Fixed-example unit tests remain
 mandatory; properties are in ADDITION, not instead.
 
@@ -937,8 +1004,8 @@ Hypothesis stateful testing (Phase 8, after peripherals exist):
 - `RuleBasedStateMachine` per peripheral driving the z180-py binding with
   random interleavings of: internal-register reads/writes, `run(n)` for
   random n, rx pushes / tx pops, and pin changes. Invariants asserted
-  after every rule, derived from UM0050 (NOT from the oracle — the
-  incumbent's ASCI is known-shaky, which is partly why z-core exists):
+  after every rule, derived from UM0050 (NOT from z-core or an incumbent —
+  the incumbent's ASCI is known-shaky, which is partly why z-core exists):
   - ASCI: RDRF never set before one full modeled frame time has elapsed
     since the push; OVRN implies RDRF was set at push time; TDRE cannot
     be observed 0 for longer than one frame time of `run`; STAT reserved
@@ -961,8 +1028,10 @@ any code changes, (3) fixed. Never delete a pinned regression.
 
 - **SST**: SingleStepTests JSON suite (per-opcode state-transition tests).
 - **UM0050**: Zilog Z8018x family MPU User Manual (the authority).
-- **Oracle**: the incumbent z180emu, accessed only as a running black box
-  through qns's existing binding.
+- **Reference model**: first-party pure Python transitions independently
+  authored from verified UM0050 facts; never imports z-core or emulator code.
+- **Optional incumbent**: an existing emulator accessed only as a black box,
+  never a required authority or gate.
 - **Internal I/O window**: the 64-byte on-chip register file (3.6).
 - **TRAP**: Z180 undefined-opcode interrupt (3.4).
 - **Gate**: a phase's exit criteria — commands + pasted output.
