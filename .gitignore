@@ -1,0 +1,4 @@
+/target/
+/docs/vendor/*.pdf
+*.pyd
+node_modules/
