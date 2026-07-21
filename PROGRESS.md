@@ -1704,6 +1704,57 @@ is the next unchecked plan item.
 
 ## Phase 6 — On-chip peripherals
 
+### P6.1 — PRT0/PRT1 (2026-07-21)
+
+PRT0 and PRT1 now use the common phi/20 timer phase documented by UM0050.
+Each enabled 16-bit TMDR decrements to zero, sets its read-only TIF at zero,
+keeps zero observable for one timer interval, and reloads from RLDR on the
+following tick. TMDR and RLDR reset to FFFFh; TMDR writes are accepted only
+while the corresponding channel is stopped.
+
+A low-byte TMDR read captures the simultaneous high byte for the following
+high-byte read. TIF clearing requires the documented sequence of reading TCR
+with the flag set and then reading either byte of that channel's TMDR. Each
+qualified TIF/TIE request drives only its existing Phase 5 internal-interrupt
+bit; IFF gating, PRT0-before-PRT1 priority, vector construction, and interrupt
+acknowledge remain owned by the interrupt controller.
+
+The first focused run passed four tests and failed only the coherent-read test:
+that test had changed TMDR through a software write, whose stopped-register
+write path invalidates the prior latch. The test was corrected to cross a real
+phi/20 counter tick from 1300h to 12FFh, directly exercising the documented
+coherent-read purpose. No production behavior changed for that correction.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core prt_ -- --nocapture
+running 5 tests
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 47 tests
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.99s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.1 is complete; P6.2 FRC is
+the next unchecked Phase 6 task. Gate G6 remains open until all seven Phase 6
+tasks are complete.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential

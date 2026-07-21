@@ -54,6 +54,21 @@ INT0 Mode 0 therefore executes RST 38h, and INT0 Mode 2 uses `FFh` as the low
 byte of its `I:FFh` vector-table address. No runner-only or mode-specific
 vector setter exists.
 
+### Programmable reload timers
+
+PRT0 and PRT1 share a system-clock-divided-by-20 phase accumulator. At every
+20 elapsed phi cycles, each enabled channel advances once. A nonzero TMDR
+decrements; the transition from one to zero sets TIF and leaves zero visible
+for that interval; the following timer tick reloads TMDR from RLDR. A channel
+raises its internal interrupt request only while both its TIF and TIE bits are
+set.
+
+Timer time is charged by the same `finish_step` boundary that updates
+`cycle_count()`. Consequently, a TIF raised by an instruction or HALT idle
+step is eligible at the following instruction-boundary interrupt checkpoint.
+This preserves the documented elapsed-cycle behavior without exposing
+mid-instruction bus phases.
+
 ## Intentional approximations
 
 ### Bus phases

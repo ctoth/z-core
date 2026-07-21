@@ -14,7 +14,8 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use ioregs::{
-    BBR, CBAR, CBR, DCNTL, ICR, IL, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, ReadEffect, WriteEffect,
+    BBR, CBAR, CBR, DCNTL, ICR, IL, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RLDR0H, RLDR0L, RLDR1H,
+    RLDR1L, ReadEffect, TCR, TMDR0H, TMDR0L, TMDR1H, TMDR1L, WriteEffect,
 };
 use memory::Memory;
 use optable::{
@@ -96,6 +97,10 @@ pub struct Z180<B: HostBus> {
     // Phase 6 peripherals set these bits only after their own enable and
     // request conditions are satisfied; this controller owns priority only.
     internal_irq_pending: u8,
+    prt_cycle_remainder: u32,
+    prt_high_latch: [u8; 2],
+    prt_high_latch_valid: [bool; 2],
+    prt_clear_armed: u8,
     events: Vec<Event>,
 }
 
@@ -130,6 +135,10 @@ impl<B: HostBus> Z180<B> {
             nmi_level: false,
             nmi_pending: false,
             internal_irq_pending: 0,
+            prt_cycle_remainder: 0,
+            prt_high_latch: [0; 2],
+            prt_high_latch_valid: [false; 2],
+            prt_clear_armed: 0,
             events: Vec::new(),
         };
         cpu.recompute_mmu_pages();
@@ -161,6 +170,10 @@ impl<B: HostBus> Z180<B> {
         self.nmi_level = false;
         self.nmi_pending = false;
         self.internal_irq_pending = 0;
+        self.prt_cycle_remainder = 0;
+        self.prt_high_latch = [0; 2];
+        self.prt_high_latch_valid = [false; 2];
+        self.prt_clear_armed = 0;
         self.events.clear();
     }
 
@@ -312,7 +325,9 @@ impl<B: HostBus> Z180<B> {
             return 0;
         }
         match spec.read_effect {
-            ReadEffect::None => self.io_regs[index] & spec.read_mask,
+            ReadEffect::None | ReadEffect::Tcr | ReadEffect::TmdrHigh | ReadEffect::TmdrLow => {
+                self.io_regs[index] & spec.read_mask
+            }
         }
     }
 
@@ -1656,12 +1671,46 @@ impl<B: HostBus> Z180<B> {
     fn read_io(&mut self, port: u16) -> u8 {
         if let Some(index) = self.internal_io_index(port) {
             let _ = self.bus.io_read(port);
-            return self.io_reg_peek(index as u8);
+            return self.read_internal_io(index);
         }
         self.timing_io_waits = self
             .timing_io_waits
             .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
         self.bus.io_read(port)
+    }
+
+    fn read_internal_io(&mut self, index: usize) -> u8 {
+        let spec = IO_REG_SPECS[index];
+        let value = self.io_reg_peek(index as u8);
+        match spec.read_effect {
+            ReadEffect::None => value,
+            ReadEffect::Tcr => {
+                self.prt_clear_armed = (value >> 6) & 0x03;
+                value
+            }
+            ReadEffect::TmdrLow | ReadEffect::TmdrHigh => {
+                let channel = usize::from(index >= TMDR1L);
+                let result = if spec.read_effect == ReadEffect::TmdrLow {
+                    let high_index = if channel == 0 { TMDR0H } else { TMDR1H };
+                    self.prt_high_latch[channel] = self.io_regs[high_index];
+                    self.prt_high_latch_valid[channel] = true;
+                    value
+                } else if self.prt_high_latch_valid[channel] {
+                    self.prt_high_latch_valid[channel] = false;
+                    self.prt_high_latch[channel]
+                } else {
+                    value
+                };
+
+                let channel_mask = 1_u8 << channel;
+                if self.prt_clear_armed & channel_mask != 0 {
+                    self.io_regs[TCR] &= !(0x40_u8 << channel);
+                    self.prt_clear_armed &= !channel_mask;
+                    self.update_prt_interrupt_requests();
+                }
+                result
+            }
+        }
     }
 
     fn write_io(&mut self, port: u16, value: u8) {
@@ -1683,8 +1732,17 @@ impl<B: HostBus> Z180<B> {
         }
         let old = self.io_regs[index];
         self.io_regs[index] = match spec.write_effect {
-            WriteEffect::None | WriteEffect::Mmu => {
+            WriteEffect::None | WriteEffect::Mmu | WriteEffect::Tcr => {
                 (old & !spec.write_mask) | (value & spec.write_mask)
+            }
+            WriteEffect::Tmdr => {
+                let channel = usize::from(index >= TMDR1L);
+                if self.io_regs[TCR] & (1_u8 << channel) == 0 {
+                    self.prt_high_latch_valid[channel] = false;
+                    (old & !spec.write_mask) | (value & spec.write_mask)
+                } else {
+                    old
+                }
             }
             WriteEffect::Rdr => {
                 let status_index = if index == 0x08 { 0x04 } else { 0x05 };
@@ -1718,6 +1776,8 @@ impl<B: HostBus> Z180<B> {
         };
         if spec.write_effect == WriteEffect::Mmu {
             self.recompute_mmu_pages();
+        } else if spec.write_effect == WriteEffect::Tcr {
+            self.update_prt_interrupt_requests();
         }
     }
 
@@ -1739,12 +1799,60 @@ impl<B: HostBus> Z180<B> {
         }
     }
 
+    fn update_prt_interrupt_requests(&mut self) {
+        self.internal_irq_pending &= !0x03;
+        if self.io_regs[TCR] & 0x50 == 0x50 {
+            self.internal_irq_pending |= 0x01;
+        }
+        if self.io_regs[TCR] & 0xa0 == 0xa0 {
+            self.internal_irq_pending |= 0x02;
+        }
+    }
+
+    fn advance_prt(&mut self, cycles: u32) {
+        let total_cycles = self.prt_cycle_remainder.saturating_add(cycles);
+        let ticks = total_cycles / 20;
+        self.prt_cycle_remainder = total_cycles % 20;
+
+        for _ in 0..ticks {
+            for channel in 0..2 {
+                if self.io_regs[TCR] & (1_u8 << channel) == 0 {
+                    continue;
+                }
+
+                let (tmdr_low, tmdr_high, rldr_low, rldr_high, flag) = if channel == 0 {
+                    (TMDR0L, TMDR0H, RLDR0L, RLDR0H, 0x40)
+                } else {
+                    (TMDR1L, TMDR1H, RLDR1L, RLDR1H, 0x80)
+                };
+                let count = u16::from_le_bytes([self.io_regs[tmdr_low], self.io_regs[tmdr_high]]);
+                let next = if count == 0 {
+                    u16::from_le_bytes([self.io_regs[rldr_low], self.io_regs[rldr_high]])
+                } else {
+                    let decremented = count - 1;
+                    if decremented == 0 {
+                        self.io_regs[TCR] |= flag;
+                    }
+                    decremented
+                };
+                let [low, high] = next.to_le_bytes();
+                self.io_regs[tmdr_low] = low;
+                self.io_regs[tmdr_high] = high;
+            }
+        }
+
+        if ticks != 0 {
+            self.update_prt_interrupt_requests();
+        }
+    }
+
     fn wait_cycles(&self) -> u32 {
         self.timing_memory_waits
             .saturating_add(self.timing_io_waits)
     }
 
     fn finish_step(&mut self, cycles: u32) -> u32 {
+        self.advance_prt(cycles);
         self.cycle_count = self.cycle_count.saturating_add(u64::from(cycles));
         cycles
     }
@@ -1962,7 +2070,11 @@ mod tests {
         assert_eq!(baseline.io_reg_peek(0x00), 0x10, "CNTLA0");
         assert_eq!(baseline.io_reg_peek(0x02), 0x07, "CNTLB0");
         assert_eq!(baseline.io_reg_peek(0x04), 0x02, "STAT0 TDRE");
+        assert_eq!(baseline.io_reg_peek(TMDR0L as u8), 0xff, "TMDR0L");
+        assert_eq!(baseline.io_reg_peek(TMDR0H as u8), 0xff, "TMDR0H");
         assert_eq!(baseline.io_reg_peek(0x0e), 0xff, "RLDR0L");
+        assert_eq!(baseline.io_reg_peek(TMDR1L as u8), 0xff, "TMDR1L");
+        assert_eq!(baseline.io_reg_peek(TMDR1H as u8), 0xff, "TMDR1H");
         assert_eq!(baseline.io_reg_peek(0x18), 0xff, "FRC");
         assert_eq!(baseline.io_reg_peek(0x30), 0x30, "DSTAT");
         assert_eq!(baseline.io_reg_peek(0x32), 0xf0, "DCNTL");
@@ -2024,6 +2136,140 @@ mod tests {
         s180.io_regs[0x04] |= 0x80;
         s180.write_internal_io(0x08, 0x5a);
         assert_eq!(s180.io_reg_peek(0x08), 0xa5, "RDRF blocks S180 RDR writes");
+    }
+
+    #[test]
+    fn prt_both_channels_tick_at_phi_divided_by_twenty_and_reload_after_zero() {
+        let mut cpu = machine();
+        cpu.write_internal_io(TMDR0L, 0x02);
+        cpu.write_internal_io(TMDR0H, 0x00);
+        cpu.write_internal_io(RLDR0L, 0x03);
+        cpu.write_internal_io(RLDR0H, 0x00);
+        cpu.write_internal_io(TMDR1L, 0x01);
+        cpu.write_internal_io(TMDR1H, 0x00);
+        cpu.write_internal_io(RLDR1L, 0x04);
+        cpu.write_internal_io(RLDR1H, 0x00);
+        cpu.write_internal_io(TCR, 0x03);
+
+        assert_eq!(cpu.finish_step(19), 19);
+        assert_eq!(cpu.io_reg_peek(TMDR0L as u8), 0x02);
+        assert_eq!(cpu.io_reg_peek(TMDR1L as u8), 0x01);
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0x03);
+
+        assert_eq!(cpu.finish_step(1), 1);
+        assert_eq!(cpu.io_reg_peek(TMDR0L as u8), 0x01);
+        assert_eq!(cpu.io_reg_peek(TMDR1L as u8), 0x00);
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0x83, "PRT1 reaches zero");
+
+        assert_eq!(cpu.finish_step(20), 20);
+        assert_eq!(cpu.io_reg_peek(TMDR0L as u8), 0x00);
+        assert_eq!(cpu.io_reg_peek(TMDR1L as u8), 0x04);
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0xc3, "PRT0 reaches zero");
+
+        assert_eq!(cpu.finish_step(20), 20);
+        assert_eq!(cpu.io_reg_peek(TMDR0L as u8), 0x03);
+        assert_eq!(cpu.io_reg_peek(TMDR1L as u8), 0x03);
+    }
+
+    #[test]
+    fn prt_tmdr_writes_require_the_corresponding_channel_to_be_stopped() {
+        let mut cpu = machine();
+        for (channel, low, high) in [(0_u8, TMDR0L, TMDR0H), (1, TMDR1L, TMDR1H)] {
+            cpu.write_internal_io(low, 0x34);
+            cpu.write_internal_io(high, 0x12);
+            cpu.write_internal_io(TCR, 1 << channel);
+            cpu.write_internal_io(low, 0xcd);
+            cpu.write_internal_io(high, 0xab);
+
+            assert_eq!(cpu.io_reg_peek(low as u8), 0x34, "channel {channel} low");
+            assert_eq!(cpu.io_reg_peek(high as u8), 0x12, "channel {channel} high");
+
+            cpu.write_internal_io(TCR, 0x00);
+        }
+    }
+
+    #[test]
+    fn prt_low_byte_read_latches_the_simultaneous_high_byte() {
+        for (channel, low, high) in [(0_u8, TMDR0L, TMDR0H), (1, TMDR1L, TMDR1H)] {
+            let mut cpu = machine();
+            cpu.write_internal_io(low, 0x00);
+            cpu.write_internal_io(high, 0x13);
+
+            assert_eq!(cpu.read_internal_io(low), 0x00, "channel {channel} low");
+            cpu.write_internal_io(TCR, 1 << channel);
+            cpu.finish_step(20);
+            assert_eq!(
+                cpu.read_internal_io(high),
+                0x13,
+                "channel {channel} latched high"
+            );
+            assert_eq!(
+                cpu.read_internal_io(high),
+                0x12,
+                "channel {channel} live high"
+            );
+        }
+    }
+
+    #[test]
+    fn prt_tif_clear_requires_tcr_then_the_corresponding_tmdr_read() {
+        let mut cpu = machine();
+        cpu.write_internal_io(TMDR0L, 0x01);
+        cpu.write_internal_io(TMDR0H, 0x00);
+        cpu.write_internal_io(TMDR1L, 0x01);
+        cpu.write_internal_io(TMDR1H, 0x00);
+        cpu.write_internal_io(TCR, 0x33);
+        cpu.finish_step(20);
+
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0xf3);
+        assert_eq!(cpu.internal_irq_pending & 0x03, 0x03);
+        assert_eq!(cpu.read_internal_io(TMDR0L), 0x00);
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0xf3, "TMDR read alone");
+
+        assert_eq!(cpu.read_internal_io(TCR), 0xf3);
+        assert_eq!(cpu.read_internal_io(TMDR0H), 0x00);
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0xb3, "only TIF0 clears");
+        assert_eq!(cpu.internal_irq_pending & 0x03, 0x02);
+
+        assert_eq!(cpu.read_internal_io(TMDR1L), 0x00);
+        assert_eq!(cpu.io_reg_peek(TCR as u8), 0x33, "TIF1 then clears");
+        assert_eq!(cpu.internal_irq_pending & 0x03, 0x00);
+    }
+
+    #[test]
+    fn prt_each_channel_delivers_its_internal_interrupt_from_halt() {
+        for (channel, low, high, tcr, flag, pending, vector) in [
+            (0_u8, TMDR0L, TMDR0H, 0x11_u8, 0x40_u8, 0x01_u8, 0x20a4_u32),
+            (1, TMDR1L, TMDR1H, 0x22, 0x80, 0x02, 0x20a6),
+        ] {
+            let mut cpu = machine();
+            cpu.write_internal_io(DCNTL, 0x00);
+            cpu.write_internal_io(IL, 0xa0);
+            cpu.write_internal_io(low, 0x01);
+            cpu.write_internal_io(high, 0x00);
+            cpu.write_internal_io(TCR, tcr);
+            cpu.mem_poke(0, 0x76);
+            cpu.mem_poke(vector, 0x56);
+            cpu.mem_poke(vector + 1, 0x34);
+            cpu.set_reg(Reg::IR, 0x2000);
+            cpu.set_reg(Reg::SP, 0x8000);
+            cpu.set_iff1(true);
+
+            assert_eq!(cpu.step(), 3, "channel {channel} enters HALT");
+            for _ in 0..5 {
+                assert_eq!(cpu.step(), 3, "channel {channel} HALT idle");
+            }
+            assert_eq!(cpu.internal_irq_pending & pending, 0);
+            assert_eq!(cpu.step(), 3, "channel {channel} reaches timer tick");
+            assert_eq!(cpu.io_reg_peek(TCR as u8) & flag, flag);
+            assert_eq!(cpu.internal_irq_pending & pending, pending);
+
+            assert_eq!(cpu.step(), 18, "channel {channel} acknowledges PRT IRQ");
+            assert_eq!(cpu.reg(Reg::PC), 0x3456, "channel {channel} vector");
+            assert_eq!(cpu.reg(Reg::SP), 0x7ffe);
+            assert_eq!(cpu.mem_peek(0x7ffe), 0x01);
+            assert_eq!(cpu.mem_peek(0x7fff), 0x00);
+        }
     }
 
     #[test]

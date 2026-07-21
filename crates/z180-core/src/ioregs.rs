@@ -1,6 +1,15 @@
 use crate::Variant;
 
 pub(crate) const IO_REGISTER_COUNT: usize = 0x40;
+pub(crate) const TMDR0L: usize = 0x0c;
+pub(crate) const TMDR0H: usize = 0x0d;
+pub(crate) const RLDR0L: usize = 0x0e;
+pub(crate) const RLDR0H: usize = 0x0f;
+pub(crate) const TCR: usize = 0x10;
+pub(crate) const TMDR1L: usize = 0x14;
+pub(crate) const TMDR1H: usize = 0x15;
+pub(crate) const RLDR1L: usize = 0x16;
+pub(crate) const RLDR1H: usize = 0x17;
 pub(crate) const DCNTL: usize = 0x32;
 pub(crate) const IL: usize = 0x33;
 pub(crate) const ITC: usize = 0x34;
@@ -19,6 +28,9 @@ pub(crate) enum Availability {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReadEffect {
     None,
+    Tcr,
+    TmdrHigh,
+    TmdrLow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +40,8 @@ pub(crate) enum WriteEffect {
     Itc,
     Mmu,
     Rdr,
+    Tcr,
+    Tmdr,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,21 +183,21 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
     },
     // 0C TMDR0L
     IoRegSpec {
-        reset: 0x00,
+        reset: 0xff,
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::TmdrLow,
+        write_effect: WriteEffect::Tmdr,
     },
     // 0D TMDR0H
     IoRegSpec {
-        reset: 0x00,
+        reset: 0xff,
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::TmdrHigh,
+        write_effect: WriteEffect::Tmdr,
     },
     // 0E RLDR0L
     IoRegSpec {
@@ -209,8 +223,8 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0x3f,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::Tcr,
+        write_effect: WriteEffect::Tcr,
     },
     // 11 reserved
     IoRegSpec {
@@ -241,21 +255,21 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
     },
     // 14 TMDR1L
     IoRegSpec {
-        reset: 0x00,
+        reset: 0xff,
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::TmdrLow,
+        write_effect: WriteEffect::Tmdr,
     },
     // 15 TMDR1H
     IoRegSpec {
-        reset: 0x00,
+        reset: 0xff,
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::TmdrHigh,
+        write_effect: WriteEffect::Tmdr,
     },
     // 16 RLDR1L
     IoRegSpec {
