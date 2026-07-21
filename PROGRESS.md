@@ -734,6 +734,51 @@ deliberately unimplemented fixture moved from newly implemented `CB` to the
 still-unimplemented `DD` prefix; its behavior is unchanged. Phase 3 task 2 is
 the next unchecked plan item.
 
+### P3.2 — Documented DD/FD pages (2026-07-20)
+
+Direct UM0050 inspection resolved the plan's DD/FD undefined-operation
+question. Table 48 defines DD/FD only when IX/IY replaces an HL or (HL)
+operand, explicitly substitutes JP (HL), and explicitly declares prefixed
+EX DE,HL illegal. The TRAP chapter defines any undefined second opcode fetch
+as a TRAP. UM0050 therefore documents no prefix-ignored DD/FD case: every
+other second byte is undefined and remains without a handler until P3.5.
+
+Separate DD and FD metadata tables each contain exactly the 39 documented
+Table 48 substitutions. Decode executes them as two-M1 instructions against
+IX or IY, including signed-displacement loads, INC/DEC, and ALU forms plus the
+documented 16-bit arithmetic, load, stack, exchange, jump, and SP forms.
+DDCB/FDCB remains unimplemented for P3.3.
+
+External corpus results:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only "dd 09,fd 29,dd 21,fd 22,dd 2a,fd 23,dd 2b,dd 34,fd 35,dd 36,dd 46,fd 70,dd 86,fd be,dd e1,fd e3,dd e5,fd e9,dd f9"
+SUMMARY pass=19000 fail=0 unimplemented=0 excluded=0
+
+> cargo run -p z180-cli -- sst --dir tests/sst/v1
+SUMMARY pass=578000 fail=0 unimplemented=127000 excluded=899
+```
+
+All 78 documented DD/FD files pass all 78,000 cases. The 127 remaining
+UNIMPLEMENTED files are only the later P3.3 DDCB/FDCB and P3.4 ED surfaces.
+
+The workspace quality authorities passed:
+
+```text
+> cargo test --workspace
+z180-cli: 12 passed; 0 failed
+z180-core: 15 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s
+
+> cargo fmt --check
+```
+
+The format check completed successfully with no output. Phase 3 task 3 is the
+next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window

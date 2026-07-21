@@ -13,6 +13,7 @@ pub(crate) enum OperandKind {
     IndirectBc,
     IndirectDe,
     IndirectHl,
+    IndirectIndex,
     IndirectSp,
     IndirectImmediate16,
     PortImmediate,
@@ -20,6 +21,7 @@ pub(crate) enum OperandKind {
     Reg8Source,
     Reg16,
     Reg16Hl,
+    Reg16Index,
     Reg16Sp,
     Reg16Stack,
     Relative8,
@@ -466,9 +468,138 @@ const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
     table
 }
 
+const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
+    let mut table = [Opcode::UNIMPLEMENTED; 256];
+
+    let mut pair = 0_usize;
+    while pair < 4 {
+        table[0x09 + pair * 0x10] = Opcode::implemented(
+            "ADD {index},{rr}",
+            [OperandKind::Reg16Index, OperandKind::Reg16],
+            2,
+            Z180::<B>::execute_index::<IY>,
+        );
+        pair += 1;
+    }
+
+    table[0x21] = Opcode::implemented(
+        "LD {index},{nn}",
+        [OperandKind::Reg16Index, OperandKind::Immediate16],
+        4,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x22] = Opcode::implemented(
+        "LD ({nn}),{index}",
+        [OperandKind::IndirectImmediate16, OperandKind::Reg16Index],
+        4,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x23] = Opcode::implemented(
+        "INC {index}",
+        [OperandKind::Reg16Index, OperandKind::None],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x2a] = Opcode::implemented(
+        "LD {index},({nn})",
+        [OperandKind::Reg16Index, OperandKind::IndirectImmediate16],
+        4,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x2b] = Opcode::implemented(
+        "DEC {index}",
+        [OperandKind::Reg16Index, OperandKind::None],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x34] = Opcode::implemented(
+        "INC ({index}+{d})",
+        [OperandKind::IndirectIndex, OperandKind::None],
+        3,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x35] = Opcode::implemented(
+        "DEC ({index}+{d})",
+        [OperandKind::IndirectIndex, OperandKind::None],
+        3,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0x36] = Opcode::implemented(
+        "LD ({index}+{d}),{n}",
+        [OperandKind::IndirectIndex, OperandKind::Immediate8],
+        4,
+        Z180::<B>::execute_index::<IY>,
+    );
+
+    let mut register = 0_usize;
+    while register < 8 {
+        if register != 6 {
+            table[0x46 + register * 8] = Opcode::implemented(
+                "LD {r},({index}+{d})",
+                [OperandKind::Reg8Destination, OperandKind::IndirectIndex],
+                3,
+                Z180::<B>::execute_index::<IY>,
+            );
+            table[0x70 + register] = Opcode::implemented(
+                "LD ({index}+{d}),{r}",
+                [OperandKind::IndirectIndex, OperandKind::Reg8Source],
+                3,
+                Z180::<B>::execute_index::<IY>,
+            );
+        }
+        register += 1;
+    }
+
+    let mut operation = 0_usize;
+    while operation < 8 {
+        table[0x86 + operation * 8] = Opcode::implemented(
+            "{alu} A,({index}+{d})",
+            [OperandKind::Accumulator, OperandKind::IndirectIndex],
+            3,
+            Z180::<B>::execute_index::<IY>,
+        );
+        operation += 1;
+    }
+
+    table[0xe1] = Opcode::implemented(
+        "POP {index}",
+        [OperandKind::Reg16Index, OperandKind::None],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0xe3] = Opcode::implemented(
+        "EX (SP),{index}",
+        [OperandKind::IndirectSp, OperandKind::Reg16Index],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0xe5] = Opcode::implemented(
+        "PUSH {index}",
+        [OperandKind::Reg16Index, OperandKind::None],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0xe9] = Opcode::implemented(
+        "JP ({index})",
+        [OperandKind::Reg16Index, OperandKind::None],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+    table[0xf9] = Opcode::implemented(
+        "LD SP,{index}",
+        [OperandKind::Reg16Sp, OperandKind::Reg16Index],
+        2,
+        Z180::<B>::execute_index::<IY>,
+    );
+
+    table
+}
+
 impl<B: HostBus> Z180<B> {
     pub(crate) const MAIN_OPCODES: [Opcode<B>; 256] = build_main_table::<B>();
     pub(crate) const CB_OPCODES: [Opcode<B>; 256] = build_cb_table::<B>();
+    pub(crate) const DD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, false>();
+    pub(crate) const FD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, true>();
 }
 
 #[cfg(test)]
@@ -533,5 +664,51 @@ mod tests {
         assert_eq!(table[0x40].mnemonic, "BIT {bit},{r}");
         assert_eq!(table[0x80].mnemonic, "RES {bit},{r}");
         assert_eq!(table[0xc0].mnemonic, "SET {bit},{r}");
+    }
+
+    #[test]
+    fn index_tables_contain_only_table_48_substitutions() {
+        for table in [&Z180::<NullBus>::DD_OPCODES, &Z180::<NullBus>::FD_OPCODES] {
+            for (opcode, entry) in table.iter().enumerate() {
+                let expected = matches!(
+                    opcode,
+                    0x09 | 0x19
+                        | 0x21
+                        | 0x22
+                        | 0x23
+                        | 0x29
+                        | 0x2a
+                        | 0x2b
+                        | 0x34
+                        | 0x35
+                        | 0x36
+                        | 0x39
+                        | 0x46
+                        | 0x4e
+                        | 0x56
+                        | 0x5e
+                        | 0x66
+                        | 0x6e
+                        | 0x70
+                        ..=0x75
+                            | 0x77
+                            | 0x7e
+                            | 0x86
+                            | 0x8e
+                            | 0x96
+                            | 0x9e
+                            | 0xa6
+                            | 0xae
+                            | 0xb6
+                            | 0xbe
+                            | 0xe1
+                            | 0xe3
+                            | 0xe5
+                            | 0xe9
+                            | 0xf9
+                );
+                assert_eq!(entry.handler.is_some(), expected, "{opcode:02x}");
+            }
+        }
     }
 }

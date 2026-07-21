@@ -81,15 +81,24 @@ impl<B: HostBus> Z180<B> {
         let pc = self.registers.get(Reg::PC);
         self.instruction_pc = pc;
         let first_opcode = self.read_logical(pc);
-        let (opcode, descriptor, m1_fetches) = if first_opcode == 0xcb {
-            let opcode = self.read_logical(pc.wrapping_add(1));
-            (opcode, Self::CB_OPCODES[usize::from(opcode)], 2)
-        } else {
-            (
+        let (opcode, descriptor, m1_fetches) = match first_opcode {
+            0xcb => {
+                let opcode = self.read_logical(pc.wrapping_add(1));
+                (opcode, Self::CB_OPCODES[usize::from(opcode)], 2)
+            }
+            0xdd => {
+                let opcode = self.read_logical(pc.wrapping_add(1));
+                (opcode, Self::DD_OPCODES[usize::from(opcode)], 2)
+            }
+            0xfd => {
+                let opcode = self.read_logical(pc.wrapping_add(1));
+                (opcode, Self::FD_OPCODES[usize::from(opcode)], 2)
+            }
+            _ => (
                 first_opcode,
                 Self::MAIN_OPCODES[usize::from(first_opcode)],
                 1,
-            )
+            ),
         };
         let Some(handler) = descriptor.handler else {
             return 0;
@@ -183,6 +192,8 @@ impl<B: HostBus> Z180<B> {
         match opcodes {
             [opcode] => Self::MAIN_OPCODES[usize::from(*opcode)].handler.is_some(),
             [0xcb, opcode] => Self::CB_OPCODES[usize::from(*opcode)].handler.is_some(),
+            [0xdd, opcode] => Self::DD_OPCODES[usize::from(*opcode)].handler.is_some(),
+            [0xfd, opcode] => Self::FD_OPCODES[usize::from(*opcode)].handler.is_some(),
             _ => false,
         }
     }
@@ -555,6 +566,138 @@ impl<B: HostBus> Z180<B> {
         self.write_reg8(code, value | mask);
     }
 
+    pub(crate) fn execute_index<const IY: bool>(&mut self, opcode: u8) {
+        let index_reg = if IY { Reg::IY } else { Reg::IX };
+
+        match opcode {
+            0x09 | 0x19 | 0x29 | 0x39 => {
+                let index = self.registers.get(index_reg);
+                let value = match (opcode >> 4) & 0x03 {
+                    0 => self.registers.get(Reg::BC),
+                    1 => self.registers.get(Reg::DE),
+                    2 => index,
+                    _ => self.registers.get(Reg::SP),
+                };
+                let sum = u32::from(index) + u32::from(value);
+                let result = sum as u16;
+                let mut flags = self.flags() & (FLAG_S | FLAG_Z | FLAG_PV);
+                flags |= result.to_be_bytes()[0] & FLAG_XY;
+                if ((index ^ value ^ result) & 0x1000) != 0 {
+                    flags |= FLAG_H;
+                }
+                if sum > 0xffff {
+                    flags |= FLAG_C;
+                }
+                self.registers.set(index_reg, result);
+                self.set_flags(flags);
+            }
+            0x21 => {
+                let value = self.read_word(self.instruction_pc.wrapping_add(2));
+                self.registers.set(index_reg, value);
+            }
+            0x22 => {
+                let address = self.read_word(self.instruction_pc.wrapping_add(2));
+                self.write_word(address, self.registers.get(index_reg));
+            }
+            0x23 => {
+                let value = self.registers.get(index_reg).wrapping_add(1);
+                self.registers.set(index_reg, value);
+            }
+            0x2a => {
+                let address = self.read_word(self.instruction_pc.wrapping_add(2));
+                let value = self.read_word(address);
+                self.registers.set(index_reg, value);
+            }
+            0x2b => {
+                let value = self.registers.get(index_reg).wrapping_sub(1);
+                self.registers.set(index_reg, value);
+            }
+            0x34 | 0x35 => {
+                let displacement = self.read_logical(self.instruction_pc.wrapping_add(2)) as i8;
+                let address = self
+                    .registers
+                    .get(index_reg)
+                    .wrapping_add(i16::from(displacement) as u16);
+                let value = self.read_logical(address);
+                let result = if opcode == 0x34 {
+                    value.wrapping_add(1)
+                } else {
+                    value.wrapping_sub(1)
+                };
+                let mut flags = Self::sign_zero_xy(result) | (self.flags() & FLAG_C);
+                if opcode == 0x34 {
+                    if value & 0x0f == 0x0f {
+                        flags |= FLAG_H;
+                    }
+                    if value == 0x7f {
+                        flags |= FLAG_PV;
+                    }
+                } else {
+                    flags |= FLAG_N;
+                    if value & 0x0f == 0 {
+                        flags |= FLAG_H;
+                    }
+                    if value == 0x80 {
+                        flags |= FLAG_PV;
+                    }
+                }
+                self.write_logical(address, result);
+                self.set_flags(flags);
+            }
+            0x36 => {
+                let displacement = self.read_logical(self.instruction_pc.wrapping_add(2)) as i8;
+                let address = self
+                    .registers
+                    .get(index_reg)
+                    .wrapping_add(i16::from(displacement) as u16);
+                let value = self.read_logical(self.instruction_pc.wrapping_add(3));
+                self.write_logical(address, value);
+            }
+            0x46 | 0x4e | 0x56 | 0x5e | 0x66 | 0x6e | 0x7e => {
+                let displacement = self.read_logical(self.instruction_pc.wrapping_add(2)) as i8;
+                let address = self
+                    .registers
+                    .get(index_reg)
+                    .wrapping_add(i16::from(displacement) as u16);
+                let value = self.read_logical(address);
+                self.write_reg8((opcode >> 3) & 0x07, value);
+            }
+            0x70..=0x75 | 0x77 => {
+                let displacement = self.read_logical(self.instruction_pc.wrapping_add(2)) as i8;
+                let address = self
+                    .registers
+                    .get(index_reg)
+                    .wrapping_add(i16::from(displacement) as u16);
+                let value = self.read_reg8(opcode & 0x07);
+                self.write_logical(address, value);
+            }
+            0x86 | 0x8e | 0x96 | 0x9e | 0xa6 | 0xae | 0xb6 | 0xbe => {
+                let displacement = self.read_logical(self.instruction_pc.wrapping_add(2)) as i8;
+                let address = self
+                    .registers
+                    .get(index_reg)
+                    .wrapping_add(i16::from(displacement) as u16);
+                let value = self.read_logical(address);
+                self.execute_alu((opcode >> 3) & 0x07, value);
+            }
+            0xe1 => {
+                let value = self.pop_word();
+                self.registers.set(index_reg, value);
+            }
+            0xe3 => {
+                let sp = self.registers.get(Reg::SP);
+                let memory_value = self.read_word(sp);
+                let index = self.registers.get(index_reg);
+                self.write_word(sp, index);
+                self.registers.set(index_reg, memory_value);
+            }
+            0xe5 => self.push_word(self.registers.get(index_reg)),
+            0xe9 => self.registers.set(Reg::PC, self.registers.get(index_reg)),
+            0xf9 => self.registers.set(Reg::SP, self.registers.get(index_reg)),
+            _ => {}
+        }
+    }
+
     pub(crate) fn execute_ld_absolute_hl(&mut self, _opcode: u8) {
         let address = self.immediate16();
         self.write_word(address, self.registers.get(Reg::HL));
@@ -867,7 +1010,56 @@ mod tests {
             );
         }
 
-        assert!(!Z180::<NullBus>::is_instruction_implemented(&[0xdd, 0x00]));
+        for prefix in [0xdd, 0xfd] {
+            for opcode in 0_u8..=u8::MAX {
+                let expected = matches!(
+                    opcode,
+                    0x09 | 0x19
+                        | 0x21
+                        | 0x22
+                        | 0x23
+                        | 0x29
+                        | 0x2a
+                        | 0x2b
+                        | 0x34
+                        | 0x35
+                        | 0x36
+                        | 0x39
+                        | 0x46
+                        | 0x4e
+                        | 0x56
+                        | 0x5e
+                        | 0x66
+                        | 0x6e
+                        | 0x70
+                        ..=0x75
+                            | 0x77
+                            | 0x7e
+                            | 0x86
+                            | 0x8e
+                            | 0x96
+                            | 0x9e
+                            | 0xa6
+                            | 0xae
+                            | 0xb6
+                            | 0xbe
+                            | 0xe1
+                            | 0xe3
+                            | 0xe5
+                            | 0xe9
+                            | 0xf9
+                );
+                assert_eq!(
+                    Z180::<NullBus>::is_instruction_implemented(&[prefix, opcode]),
+                    expected,
+                    "{prefix:02x} {opcode:02x}"
+                );
+            }
+        }
+
+        assert!(!Z180::<NullBus>::is_instruction_implemented(&[
+            0xdd, 0xcb, 0x00, 0x06
+        ]));
     }
 
     #[test]
