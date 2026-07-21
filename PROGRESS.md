@@ -87,6 +87,43 @@ OTIM/OTDM. This prevents a first-party reference function from inventing values
 that the manufacturer did not specify. The Appendix C reset-state ITC value was
 also corrected from `0x00` to the verified `0x01` reset value.
 
+### P1.5 — UM0050 reference corpus (2026-07-20)
+
+The exact generation command completed with exit code 0 and no stdout/stderr:
+
+```text
+> uv run --project tools/reference python tools/reference/generate.py --out tests/z180-sst
+```
+
+The parsed corpus census is:
+
+```text
+{
+  "files": 36,
+  "counts": [
+    {
+      "cases": 50,
+      "files": 1
+    },
+    {
+      "cases": 200,
+      "files": 35
+    }
+  ]
+}
+```
+
+The 35 200-case files are 34 Z180-added opcode forms plus the MMU family. The
+50-case TRAP file covers all verified representative second-opcode forms:
+
+```text
+CB30 CB31 CB32 CB33 CB34 CB35 CB36 CB37 DD24 ED31 FD24
+```
+
+The reference source imports neither z-core nor an incumbent emulator. All
+instruction, flag, TRAP, ITC, and MMU constants cite verified manufacturer
+facts in `docs/verification-log.md`.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
