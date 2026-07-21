@@ -47,6 +47,13 @@ C:\Users\Q\code\z-core\docs\vendor\um0050.pdf 2922169
 - Path: `tests/sst`
 - Pinned commit: `ebe1875d48f374bcfd4b505d8eb8ee751568b5f7`
 
+### Phase 1 task-order correction (2026-07-20)
+
+The original P1.2 runner depended on the machine, register file, memory, and
+`step()` API created by the original P1.3 stub task. Q authorized reordering
+the two tasks. `PLAN.md` now defines P1.2 as the stub CPU subset and P1.3 as
+the SST runner; the runner-code cross-reference in P1.7 now points to P1.3.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP

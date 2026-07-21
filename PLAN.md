@@ -522,7 +522,11 @@ Tasks:
 1. **Vendor the Z80 single-step suite.** Add
    `https://github.com/SingleStepTests/z80` as git submodule at `tests/sst`.
    Record its commit hash in PROGRESS.md.
-2. **SST runner** in z180-cli: `z180-cli sst --dir tests/sst/v1 [--only
+2. **Stub CPU subset.** Implement in z180-core ONLY: fetch loop skeleton,
+   register file, and the opcodes 0x00 NOP, 0x76 HALT, and the 0x40..0x7F
+   LD r,r' block. Nothing else. This exists purely to prove the harness
+   end-to-end.
+3. **SST runner** in z180-cli: `z180-cli sst --dir tests/sst/v1 [--only
    XX,YY] [--report json|text]`. For each JSON test: build a 64K flat-RAM
    machine (MMU reset state = identity for the logical space in play),
    load `initial` state (registers incl. AF', I, R, IFFs; memory bytes), run
@@ -534,10 +538,6 @@ Tasks:
    excluded by the opcode policy list (Appendix A). Distinguish three
    outcomes per test: PASS / FAIL (with first differing field printed) /
    UNIMPLEMENTED (opcode has no handler). UNIMPLEMENTED is never a pass.
-3. **Stub CPU subset.** Implement in z180-core ONLY: fetch loop skeleton,
-   register file, and the opcodes 0x00 NOP, 0x76 HALT, and the 0x40..0x7F
-   LD r,r' block. Nothing else. This exists purely to prove the harness
-   end-to-end.
 4. **Negative control.** Add a hidden debug flag `--sabotage-ld` to the
    runner that deliberately swaps the operands of LD r,r' before comparison.
    Prove: without the flag, the LD/NOP/HALT SST files pass; with the flag,
@@ -586,7 +586,7 @@ Tasks:
    will hit UNIMPLEMENTED opcodes; the harness must report that cleanly, not
    crash).
 7. **z180-sst runner mode**: `z180-cli sst --dir tests/z180-sst` shares all
-   runner code with task 2.
+   runner code with task 3.
 
 **GATE G1** (all pasted):
 - `z180-cli sst --dir tests/sst/v1 --only 00,76,40..7f` → PASS for all
