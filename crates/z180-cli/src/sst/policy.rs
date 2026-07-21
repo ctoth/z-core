@@ -159,6 +159,7 @@ const fn defined_ed(opcode: u8) -> bool {
             | 0x28
             | 0x29
             | 0x2c
+            | 0x30
             | 0x34
             | 0x38
             | 0x39
@@ -262,6 +263,8 @@ mod tests {
         assert!(undefined_reason(&[0xcb, 0x30]).is_some());
         assert!(undefined_reason(&[0xcb, 0x2f]).is_none());
         assert!(undefined_reason(&[0xed, 0x02]).is_some());
+        assert!(undefined_reason(&[0xed, 0x30]).is_none());
+        assert!(undefined_reason(&[0xed, 0x31]).is_some());
         assert!(undefined_reason(&[0xed, 0x4c]).is_none());
         assert!(undefined_reason(&[0xdd, 0x24]).is_some());
         assert!(undefined_reason(&[0xdd, 0x21]).is_none());

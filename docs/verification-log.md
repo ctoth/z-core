@@ -18,3 +18,4 @@
 | CB opcodes 30h–37h have no defined SLL operation on Z80180 | Op Code Map, Table 49, p. 249 | 2026-07-20 |
 | The defined ED opcode set is exactly the populated cells in the Z80180 ED map; blank ED cells are undefined | Op Code Map, Table 50, p. 250; TRAP Interrupt, pp. 70–72 | 2026-07-20 |
 | An undefined first, second, or third opcode fetch invokes TRAP; UFO distinguishes second/third-opcode cases | TRAP Interrupt and Figures 32–33, pp. 70–72 | 2026-07-20 |
+| IN0 includes ED30 as the `g=110` flags-only form; ED00/08/10/18/20/28/38 load B/C/D/E/H/L/A, while OUT0 has only the seven register forms and ED31 is not documented | I/O Instructions, Table 46, pp. 231–232; ED op-code map, Table 50, p. 250 | 2026-07-20 |

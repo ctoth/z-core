@@ -371,7 +371,7 @@ All on the ED page:
 
 | Mnemonic     | Encoding (believed)       | Notes |
 |--------------|---------------------------|-------|
-| IN0 r,(n)    | ED 00/08/10/18/20/28/38 n | r = B,C,D,E,H,L,A; port 0x00nn |
+| IN0 r,(n)    | ED 00/08/10/18/20/28/30/38 n | r = B,C,D,E,H,L,A; ED30 changes flags only; port 0x00nn |
 | OUT0 (n),r   | ED 01/09/11/19/21/29/39 n | port 0x00nn |
 | TST r        | ED 04/0C/14/1C/24/2C/3C   | A AND r → flags only |
 | TST (HL)     | ED 34                     | |
