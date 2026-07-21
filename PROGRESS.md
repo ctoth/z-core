@@ -1755,6 +1755,48 @@ The formatting check completed with no output. P6.1 is complete; P6.2 FRC is
 the next unchecked Phase 6 task. Gate G6 remains open until all seven Phase 6
 tasks are complete.
 
+### P6.2 — FRC (2026-07-21)
+
+The 8-bit FRC now decrements once every ten elapsed phi clocks, wraps from
+00h to FFh, and advances independently of reads. It preserves the existing
+read-only register contract, continues while ICR selects I/O STOP, and RESET
+restores both FFh and the divide-by-ten phase.
+
+UM0050 printed p. 172 confirms the register, reset, read-only, and I/O STOP
+behavior but omits the rate. The original Hitachi HD64180 User's Manual
+§2.15, printed p. 96, explicitly states one decrement per ten phi clocks and
+that reads do not affect counting; this directly verifies the rate marked
+`verify` in the controlling plan.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core frc_ -- --nocapture
+running 3 tests
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 50 tests
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.97s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.2 is complete; P6.3
+ASCI0/ASCI1 is the next unchecked Phase 6 task. Gate G6 remains open.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential

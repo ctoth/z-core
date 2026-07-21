@@ -14,8 +14,8 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use ioregs::{
-    BBR, CBAR, CBR, DCNTL, ICR, IL, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RLDR0H, RLDR0L, RLDR1H,
-    RLDR1L, ReadEffect, TCR, TMDR0H, TMDR0L, TMDR1H, TMDR1L, WriteEffect,
+    BBR, CBAR, CBR, DCNTL, FRC, ICR, IL, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RLDR0H, RLDR0L,
+    RLDR1H, RLDR1L, ReadEffect, TCR, TMDR0H, TMDR0L, TMDR1H, TMDR1L, WriteEffect,
 };
 use memory::Memory;
 use optable::{
@@ -97,6 +97,7 @@ pub struct Z180<B: HostBus> {
     // Phase 6 peripherals set these bits only after their own enable and
     // request conditions are satisfied; this controller owns priority only.
     internal_irq_pending: u8,
+    frc_cycle_remainder: u32,
     prt_cycle_remainder: u32,
     prt_high_latch: [u8; 2],
     prt_high_latch_valid: [bool; 2],
@@ -135,6 +136,7 @@ impl<B: HostBus> Z180<B> {
             nmi_level: false,
             nmi_pending: false,
             internal_irq_pending: 0,
+            frc_cycle_remainder: 0,
             prt_cycle_remainder: 0,
             prt_high_latch: [0; 2],
             prt_high_latch_valid: [false; 2],
@@ -170,6 +172,7 @@ impl<B: HostBus> Z180<B> {
         self.nmi_level = false;
         self.nmi_pending = false;
         self.internal_irq_pending = 0;
+        self.frc_cycle_remainder = 0;
         self.prt_cycle_remainder = 0;
         self.prt_high_latch = [0; 2];
         self.prt_high_latch_valid = [false; 2];
@@ -1852,6 +1855,10 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn finish_step(&mut self, cycles: u32) -> u32 {
+        let frc_cycles = self.frc_cycle_remainder.saturating_add(cycles);
+        let frc_ticks = frc_cycles / 10;
+        self.frc_cycle_remainder = frc_cycles % 10;
+        self.io_regs[FRC] = self.io_regs[FRC].wrapping_sub(frc_ticks as u8);
         self.advance_prt(cycles);
         self.cycle_count = self.cycle_count.saturating_add(u64::from(cycles));
         cycles
@@ -2270,6 +2277,48 @@ mod tests {
             assert_eq!(cpu.mem_peek(0x7ffe), 0x01);
             assert_eq!(cpu.mem_peek(0x7fff), 0x00);
         }
+    }
+
+    #[test]
+    fn frc_counts_down_once_per_ten_phi_cycles_and_wraps() {
+        let mut cpu = machine();
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff);
+
+        assert_eq!(cpu.finish_step(9), 9);
+        assert_eq!(cpu.read_internal_io(FRC), 0xff);
+        assert_eq!(cpu.read_internal_io(FRC), 0xff, "reads do not change FRC");
+
+        assert_eq!(cpu.finish_step(1), 1);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xfe);
+        assert_eq!(cpu.finish_step(2_540), 2_540);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0x00);
+        assert_eq!(cpu.finish_step(10), 10);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff, "zero wraps to FFh");
+    }
+
+    #[test]
+    fn frc_is_read_only_and_continues_in_io_stop() {
+        let mut cpu = machine();
+        cpu.write_internal_io(FRC, 0x12);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff, "FRC write is ignored");
+
+        cpu.write_internal_io(ICR, 0x20);
+        assert_eq!(cpu.io_reg_peek(ICR as u8), 0x20, "I/O STOP is active");
+        cpu.finish_step(10);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xfe);
+    }
+
+    #[test]
+    fn frc_reset_restores_ff_and_restarts_the_divide_by_ten_phase() {
+        let mut cpu = machine();
+        cpu.finish_step(9);
+        cpu.reset();
+
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff);
+        cpu.finish_step(1);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff);
+        cpu.finish_step(9);
+        assert_eq!(cpu.io_reg_peek(FRC as u8), 0xfe);
     }
 
     #[test]

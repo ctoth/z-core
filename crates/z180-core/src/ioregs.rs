@@ -10,6 +10,7 @@ pub(crate) const TMDR1L: usize = 0x14;
 pub(crate) const TMDR1H: usize = 0x15;
 pub(crate) const RLDR1L: usize = 0x16;
 pub(crate) const RLDR1H: usize = 0x17;
+pub(crate) const FRC: usize = 0x18;
 pub(crate) const DCNTL: usize = 0x32;
 pub(crate) const IL: usize = 0x33;
 pub(crate) const ITC: usize = 0x34;

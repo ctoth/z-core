@@ -69,6 +69,14 @@ step is eligible at the following instruction-boundary interrupt checkpoint.
 This preserves the documented elapsed-cycle behavior without exposing
 mid-instruction bus phases.
 
+### Free-running counter
+
+FRC decrements once per ten elapsed phi cycles and wraps from `00h` to `FFh`.
+It uses its own divide-by-ten phase, advances at the same `finish_step`
+boundary as PRT and `cycle_count()`, and continues while ICR selects I/O STOP.
+Reads do not change either its count or divider phase. RESET restores `FFh`
+and restarts the divider phase.
+
 ## Intentional approximations
 
 ### Bus phases
