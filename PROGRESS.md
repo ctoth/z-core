@@ -928,6 +928,44 @@ warnings-denied Clippy and format check passed:
 
 Phase 3 task 5 is the next unchecked plan item.
 
+### P3.5 — undefined-opcode TRAP (2026-07-21)
+
+Undefined opcode fetches now take the synchronous Z180 TRAP path instead of
+returning an unimplemented sentinel. Reset initializes ITC to `0x01`; a TRAP
+preserves the three enable bits, sets TRAP, sets UFO only for an undefined
+third opcode byte, preserves IEF1/IEF2, pushes the post-fetch PC, and vectors
+to logical `0x0000`. Decode carries indexed-bit classification forward rather
+than rereading an opcode byte, so an external-memory mapping does not observe
+an extra read.
+
+The core emits the plan's `Event::Trap` with the instruction address, opcode
+bytes, and opcode-byte count. `drain_events()` exposes those events for P3.7;
+the complete configurable ring and the other event variants remain owned by
+Phase 7. Phase 5 retains ownership of guest ITC dispatch and write masks.
+
+Pinned tests cover undefined second-byte CB/DD/ED/FD forms and undefined
+third-byte DDCB/FDCB forms. They verify the stacked address, R increments,
+ITC TRAP/UFO state, unchanged IEFs, logical-zero vector, cycle/event data, and
+event draining. The exact P3.5 targeted gate and workspace regression pass:
+
+```text
+> cargo test -p z180-core trap
+2 passed; 0 failed
+
+> cargo test --workspace
+z180-cli: 13 passed; 0 failed
+z180-core: 19 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.85s
+
+> cargo fmt --check
+```
+
+The format check completed successfully with no output. Phase 3 task 6 is the
+next unchecked plan item.
+
 ## Phase 4 — Timing and ZEXDOC
 
 ## Phase 5 — Interrupts, MMU, internal I/O window

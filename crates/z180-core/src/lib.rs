@@ -3,6 +3,8 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
+
 mod memory;
 mod optable;
 mod registers;
@@ -30,6 +32,16 @@ pub trait HostBus {
     fn io_write(&mut self, port: u16, value: u8);
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    Trap {
+        cycle: u64,
+        pc: u16,
+        opcode: [u8; 3],
+        len: u8,
+    },
+}
+
 pub struct Z180<B: HostBus> {
     registers: Registers,
     memory: Memory,
@@ -38,10 +50,12 @@ pub struct Z180<B: HostBus> {
     cycle_count: u64,
     halted: bool,
     sleeping: bool,
+    itc: u8,
     iff1: bool,
     iff2: bool,
     ei_shadow: bool,
     interrupt_mode: u8,
+    events: Vec<Event>,
 }
 
 impl<B: HostBus> Z180<B> {
@@ -54,10 +68,12 @@ impl<B: HostBus> Z180<B> {
             cycle_count: 0,
             halted: false,
             sleeping: false,
+            itc: 0x01,
             iff1: false,
             iff2: false,
             ei_shadow: false,
             interrupt_mode: 0,
+            events: Vec::new(),
         })
     }
 
@@ -66,10 +82,12 @@ impl<B: HostBus> Z180<B> {
         self.instruction_pc = 0;
         self.halted = false;
         self.sleeping = false;
+        self.itc = 0x01;
         self.iff1 = false;
         self.iff2 = false;
         self.ei_shadow = false;
         self.interrupt_mode = 0;
+        self.events.clear();
     }
 
     pub fn step(&mut self) -> u32 {
@@ -84,41 +102,49 @@ impl<B: HostBus> Z180<B> {
         let pc = self.registers.get(Reg::PC);
         self.instruction_pc = pc;
         let first_opcode = self.read_logical(pc);
-        let (opcode, descriptor, m1_fetches) = match first_opcode {
+        let (opcode, descriptor, m1_fetches, is_indexed_bit) = match first_opcode {
             0xcb => {
                 let opcode = self.read_logical(pc.wrapping_add(1));
-                (opcode, Self::CB_OPCODES[usize::from(opcode)], 2)
+                (opcode, Self::CB_OPCODES[usize::from(opcode)], 2, false)
             }
             0xdd => {
                 let opcode = self.read_logical(pc.wrapping_add(1));
                 if opcode == 0xcb {
                     let opcode = self.read_logical(pc.wrapping_add(3));
-                    (opcode, Self::DDCB_OPCODES[usize::from(opcode)], 2)
+                    (opcode, Self::DDCB_OPCODES[usize::from(opcode)], 2, true)
                 } else {
-                    (opcode, Self::DD_OPCODES[usize::from(opcode)], 2)
+                    (opcode, Self::DD_OPCODES[usize::from(opcode)], 2, false)
                 }
             }
             0xed => {
                 let opcode = self.read_logical(pc.wrapping_add(1));
-                (opcode, Self::ED_OPCODES[usize::from(opcode)], 2)
+                (opcode, Self::ED_OPCODES[usize::from(opcode)], 2, false)
             }
             0xfd => {
                 let opcode = self.read_logical(pc.wrapping_add(1));
                 if opcode == 0xcb {
                     let opcode = self.read_logical(pc.wrapping_add(3));
-                    (opcode, Self::FDCB_OPCODES[usize::from(opcode)], 2)
+                    (opcode, Self::FDCB_OPCODES[usize::from(opcode)], 2, true)
                 } else {
-                    (opcode, Self::FD_OPCODES[usize::from(opcode)], 2)
+                    (opcode, Self::FD_OPCODES[usize::from(opcode)], 2, false)
                 }
             }
             _ => (
                 first_opcode,
                 Self::MAIN_OPCODES[usize::from(first_opcode)],
                 1,
+                false,
             ),
         };
         let Some(handler) = descriptor.handler else {
-            return 0;
+            if is_indexed_bit {
+                self.take_trap([first_opcode, 0xcb, opcode], 3, pc.wrapping_add(4), true, 3);
+            } else if matches!(first_opcode, 0xcb | 0xdd | 0xed | 0xfd) {
+                self.take_trap([first_opcode, opcode, 0], 2, pc.wrapping_add(2), false, 2);
+            } else {
+                self.take_trap([first_opcode, 0, 0], 1, pc.wrapping_add(1), false, 1);
+            }
+            return self.finish_step(1);
         };
         debug_assert!(!descriptor.mnemonic.is_empty());
         debug_assert!(descriptor.length != 0);
@@ -163,6 +189,14 @@ impl<B: HostBus> Z180<B> {
 
     pub fn sleeping(&self) -> bool {
         self.sleeping
+    }
+
+    pub fn itc(&self) -> u8 {
+        self.itc
+    }
+
+    pub fn drain_events(&mut self) -> Vec<Event> {
+        core::mem::take(&mut self.events)
     }
 
     pub fn iff1(&self) -> bool {
@@ -227,6 +261,22 @@ impl<B: HostBus> Z180<B> {
         // owns interrupt pins, prioritized sources, acknowledge behavior, and
         // HALT wake-up, so no source can fire here yet.
         None
+    }
+
+    fn take_trap(&mut self, opcode: [u8; 3], len: u8, stacked_pc: u16, ufo: bool, m1_fetches: u8) {
+        self.itc = (self.itc & 0x07) | 0x80 | if ufo { 0x40 } else { 0 };
+        for _ in 0..m1_fetches {
+            self.registers.increment_r();
+        }
+        self.ei_shadow = false;
+        self.push_word(stacked_pc);
+        self.registers.set(Reg::PC, 0);
+        self.events.push(Event::Trap {
+            cycle: self.cycle_count,
+            pc: self.instruction_pc,
+            opcode,
+            len,
+        });
     }
 
     fn accumulator(&self) -> u8 {
@@ -1410,19 +1460,78 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_opcode_does_not_execute() {
-        let mut cpu = machine();
-        cpu.mem_poke(0x1234, 0xcb);
-        cpu.mem_poke(0x1235, 0x30);
-        cpu.set_reg(Reg::PC, 0x1234);
-        cpu.set_reg(Reg::IR, 0x5678);
+    fn undefined_second_opcode_takes_trap() {
+        for opcodes in [[0xcb, 0x30], [0xdd, 0x24], [0xed, 0x31], [0xfd, 0x24]] {
+            let mut cpu = machine();
+            cpu.mem_poke(0x1234, opcodes[0]);
+            cpu.mem_poke(0x1235, opcodes[1]);
+            cpu.set_reg(Reg::PC, 0x1234);
+            cpu.set_reg(Reg::SP, 0x8000);
+            cpu.set_reg(Reg::IR, 0x56fe);
+            cpu.set_iff1(true);
+            cpu.set_iff2(false);
 
-        assert_eq!(cpu.step(), 0);
-        assert_eq!(cpu.instruction_pc(), 0x1234);
-        assert_eq!(cpu.reg(Reg::PC), 0x1234);
-        assert_eq!(cpu.reg(Reg::IR), 0x5678);
-        assert_eq!(cpu.cycle_count(), 0);
-        assert_eq!(cpu.run(10), 0);
+            assert_eq!(cpu.step(), 1, "{opcodes:02x?}");
+            assert_eq!(cpu.instruction_pc(), 0x1234, "{opcodes:02x?}");
+            assert_eq!(cpu.reg(Reg::PC), 0, "{opcodes:02x?}");
+            assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{opcodes:02x?}");
+            assert_eq!(cpu.mem_peek(0x7ffe), 0x36, "{opcodes:02x?}");
+            assert_eq!(cpu.mem_peek(0x7fff), 0x12, "{opcodes:02x?}");
+            assert_eq!(cpu.reg(Reg::IR), 0x5680, "{opcodes:02x?}");
+            assert_eq!(cpu.itc(), 0x81, "{opcodes:02x?}");
+            assert!(cpu.iff1(), "{opcodes:02x?}");
+            assert!(!cpu.iff2(), "{opcodes:02x?}");
+            assert_eq!(cpu.cycle_count(), 1, "{opcodes:02x?}");
+            assert_eq!(
+                cpu.drain_events(),
+                vec![Event::Trap {
+                    cycle: 0,
+                    pc: 0x1234,
+                    opcode: [opcodes[0], opcodes[1], 0],
+                    len: 2,
+                }],
+                "{opcodes:02x?}"
+            );
+            assert!(cpu.drain_events().is_empty(), "{opcodes:02x?}");
+        }
+    }
+
+    #[test]
+    fn undefined_third_opcode_takes_trap_with_ufo() {
+        for prefix in [0xdd, 0xfd] {
+            let mut cpu = machine();
+            cpu.mem_poke(0x1234, prefix);
+            cpu.mem_poke(0x1235, 0xcb);
+            cpu.mem_poke(0x1236, 0x05);
+            cpu.mem_poke(0x1237, 0x40);
+            cpu.set_reg(Reg::PC, 0x1234);
+            cpu.set_reg(Reg::SP, 0x8000);
+            cpu.set_reg(Reg::IR, 0x567e);
+            cpu.set_iff1(false);
+            cpu.set_iff2(true);
+
+            assert_eq!(cpu.step(), 1, "{prefix:02x}");
+            assert_eq!(cpu.instruction_pc(), 0x1234, "{prefix:02x}");
+            assert_eq!(cpu.reg(Reg::PC), 0, "{prefix:02x}");
+            assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{prefix:02x}");
+            assert_eq!(cpu.mem_peek(0x7ffe), 0x38, "{prefix:02x}");
+            assert_eq!(cpu.mem_peek(0x7fff), 0x12, "{prefix:02x}");
+            assert_eq!(cpu.reg(Reg::IR), 0x5601, "{prefix:02x}");
+            assert_eq!(cpu.itc(), 0xc1, "{prefix:02x}");
+            assert!(!cpu.iff1(), "{prefix:02x}");
+            assert!(cpu.iff2(), "{prefix:02x}");
+            assert_eq!(cpu.cycle_count(), 1, "{prefix:02x}");
+            assert_eq!(
+                cpu.drain_events(),
+                vec![Event::Trap {
+                    cycle: 0,
+                    pc: 0x1234,
+                    opcode: [prefix, 0xcb, 0x40],
+                    len: 3,
+                }],
+                "{prefix:02x}"
+            );
+        }
     }
 
     #[test]

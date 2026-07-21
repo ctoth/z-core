@@ -113,10 +113,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unimplemented_opcode_is_reported_cleanly() {
+    fn undefined_opcode_traps_without_unimplemented_output() {
         let mut output = Vec::new();
-        run_program(&[0xdd], &mut output).expect("unimplemented opcode is a clean outcome");
-        assert_eq!(output, b"unimplemented opcode at PC=0100: dd\n");
+        run_program(&[0xdd], &mut output).expect("undefined opcode trap is a clean outcome");
+        assert!(output.is_empty());
     }
 
     #[test]
