@@ -2,10 +2,10 @@
 
 use std::ffi::{CString, c_int, c_void};
 use std::ptr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use pyo3::exceptions::{PyBufferError, PyKeyError, PyValueError};
+use pyo3::exceptions::{PyBufferError, PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyMemoryView, PyModule};
@@ -17,22 +17,90 @@ use z180_core::{
 
 const EXT_MAP_TABLE_LEN: usize = 1 << 20;
 
-struct NullBus {
+struct PythonBus {
     unmapped_read: u8,
+    mem_read: Option<Py<PyAny>>,
+    mem_write: Option<Py<PyAny>>,
+    io_read: Option<Py<PyAny>>,
+    io_write: Option<Py<PyAny>>,
+    callback_error: Arc<Mutex<Option<PyErr>>>,
 }
 
-impl HostBus for NullBus {
-    fn mem_read(&mut self, _phys: u32) -> u8 {
-        self.unmapped_read
+impl PythonBus {
+    fn disconnected(unmapped_read: u8, callback_error: Arc<Mutex<Option<PyErr>>>) -> Self {
+        Self {
+            unmapped_read,
+            mem_read: None,
+            mem_write: None,
+            io_read: None,
+            io_write: None,
+            callback_error,
+        }
     }
 
-    fn mem_write(&mut self, _phys: u32, _value: u8) {}
-
-    fn io_read(&mut self, _port: u16) -> u8 {
-        self.unmapped_read
+    fn read_callback(callback: &Option<Py<PyAny>>, address: u32) -> PyResult<Option<u8>> {
+        let Some(callback) = callback else {
+            return Ok(None);
+        };
+        Python::attach(|py| {
+            let value = callback.bind(py).call1((address,))?;
+            Ok(Some(value.call_method1("__and__", (0xff_u8,))?.extract()?))
+        })
     }
 
-    fn io_write(&mut self, _port: u16, _value: u8) {}
+    fn write_callback(callback: &Option<Py<PyAny>>, address: u32, value: u8) -> PyResult<()> {
+        let Some(callback) = callback else {
+            return Ok(());
+        };
+        Python::attach(|py| {
+            callback.bind(py).call1((address, value))?;
+            Ok(())
+        })
+    }
+
+    fn record_error(&self, error: PyErr) {
+        if let Ok(mut pending) = self.callback_error.lock()
+            && pending.is_none()
+        {
+            *pending = Some(error);
+        }
+    }
+}
+
+impl HostBus for PythonBus {
+    fn mem_read(&mut self, phys: u32) -> u8 {
+        match Self::read_callback(&self.mem_read, phys) {
+            Ok(Some(value)) => value,
+            Ok(None) => self.unmapped_read,
+            Err(error) => {
+                self.record_error(error);
+                self.unmapped_read
+            }
+        }
+    }
+
+    fn mem_write(&mut self, phys: u32, value: u8) {
+        if let Err(error) = Self::write_callback(&self.mem_write, phys, value) {
+            self.record_error(error);
+        }
+    }
+
+    fn io_read(&mut self, port: u16) -> u8 {
+        match Self::read_callback(&self.io_read, u32::from(port)) {
+            Ok(Some(value)) => value,
+            Ok(None) => self.unmapped_read,
+            Err(error) => {
+                self.record_error(error);
+                self.unmapped_read
+            }
+        }
+    }
+
+    fn io_write(&mut self, port: u16, value: u8) {
+        if let Err(error) = Self::write_callback(&self.io_write, u32::from(port), value) {
+            self.record_error(error);
+        }
+    }
 }
 
 #[pyclass(name = "Reg", module = "z180", eq, eq_int, from_py_object)]
@@ -243,8 +311,9 @@ fn remap_kind(kind: &str, data: Option<Vec<u8>>) -> PyResult<RegionKind> {
 
 #[pyclass(module = "z180")]
 struct Machine {
-    inner: Z180<NullBus>,
+    inner: Z180<PythonBus>,
     active_views: Arc<AtomicUsize>,
+    callback_error: Arc<Mutex<Option<PyErr>>>,
 }
 
 #[pyclass]
@@ -335,13 +404,13 @@ impl Machine {
     #[pyo3(signature = (config=None))]
     fn new(config: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let config = parse_config(config)?;
-        let bus = NullBus {
-            unmapped_read: config.unmapped_read,
-        };
+        let callback_error = Arc::new(Mutex::new(None));
+        let bus = PythonBus::disconnected(config.unmapped_read, Arc::clone(&callback_error));
         let inner = Z180::new(config, bus).map_err(config_error)?;
         Ok(Self {
             inner,
             active_views: Arc::new(AtomicUsize::new(0)),
+            callback_error,
         })
     }
 
@@ -349,12 +418,14 @@ impl Machine {
         self.inner.reset();
     }
 
-    fn step(&mut self) -> u32 {
-        self.inner.step()
+    fn step(&mut self) -> PyResult<u32> {
+        let cycles = self.inner.step();
+        self.return_callback_result(cycles)
     }
 
-    fn run(&mut self, cycles: u32) -> u32 {
-        self.inner.run(cycles)
+    fn run(&mut self, cycles: u32) -> PyResult<u32> {
+        let consumed = self.inner.run(cycles);
+        self.return_callback_result(consumed)
     }
 
     fn cycle_count(&self) -> u64 {
@@ -461,8 +532,9 @@ impl Machine {
         self.inner.mem_peek(phys)
     }
 
-    fn mem_poke(&mut self, phys: u32, value: u8) {
+    fn mem_poke(&mut self, phys: u32, value: u8) -> PyResult<()> {
         self.inner.mem_poke(phys, value);
+        self.return_callback_result(())
     }
 
     #[pyo3(signature = (base, size, kind, data=None))]
@@ -582,7 +654,7 @@ impl Machine {
 
     #[staticmethod]
     fn is_instruction_implemented(opcodes: &[u8]) -> bool {
-        Z180::<NullBus>::is_instruction_implemented(opcodes)
+        Z180::<PythonBus>::is_instruction_implemented(opcodes)
     }
 }
 
@@ -595,6 +667,17 @@ impl Machine {
             )));
         }
         Ok(())
+    }
+
+    fn return_callback_result<T>(&self, value: T) -> PyResult<T> {
+        let mut pending = self
+            .callback_error
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("callback error lock is poisoned"))?;
+        if let Some(error) = pending.take() {
+            return Err(error);
+        }
+        Ok(value)
     }
 }
 
@@ -723,6 +806,40 @@ fn trace_dict(py: Python<'_>, entry: TraceEntry) -> PyResult<Py<PyDict>> {
     Ok(dict.unbind())
 }
 
+#[pyfunction]
+#[pyo3(signature = (clock, mem_read=None, mem_write=None, io_read=None, io_write=None))]
+fn _compat_machine(
+    clock: u32,
+    mem_read: Option<Py<PyAny>>,
+    mem_write: Option<Py<PyAny>>,
+    io_read: Option<Py<PyAny>>,
+    io_write: Option<Py<PyAny>>,
+) -> PyResult<Machine> {
+    let callback_error = Arc::new(Mutex::new(None));
+    let bus = PythonBus {
+        unmapped_read: 0xff,
+        mem_read,
+        mem_write,
+        io_read,
+        io_write,
+        callback_error: Arc::clone(&callback_error),
+    };
+    let config = MachineConfig {
+        clock_hz: clock,
+        regions: vec![RegionDef {
+            base: 0,
+            size: 1 << 20,
+            kind: RegionKind::External,
+        }],
+        ..MachineConfig::default()
+    };
+    Ok(Machine {
+        inner: Z180::new(config, bus).map_err(config_error)?,
+        active_views: Arc::new(AtomicUsize::new(0)),
+        callback_error,
+    })
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Machine>()?;
@@ -730,5 +847,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyIrqLine>()?;
     module.add_class::<PyWatchKind>()?;
     module.add_class::<PyWatchId>()?;
+    module.add_function(wrap_pyfunction!(_compat_machine, module)?)?;
     Ok(())
 }

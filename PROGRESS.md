@@ -2633,7 +2633,73 @@ running 89 tests
 test result: ok. 89 passed; 0 failed; 0 ignored
 ```
 
-P8.1 is complete pending its commit, push, and CI. P8.2 is next after that
+P8.1 landed as `138220f`. CI run `29877242122` passed on Ubuntu in 1m13s
+and Windows in 2m15s.
+
+### P8.2 — qns compatibility layer
+
+The current `C:\Users\Q\code\qns\qns\cpu.py` was read as the signature
+authority without modifying its dirty checkout. `z180.compat.Z180` preserves
+its constructor, constants, lifecycle, register, IRQ, MMU, watch, and ASCI
+diagnostic surface, including the current `reset_asci_debug`,
+`pc_watch_cycle`, and `pc_watch_cbar` additions.
+
+A private `_compat_machine` native factory maps the full 20-bit physical
+space as one External region. Its HostBus invokes Python memory and I/O
+callbacks, masks read results to one byte, and raises the first callback
+exception after the active instruction. Public `Machine(config_dict)` is
+unchanged. The compat run loop pumps one instruction at a time: ASCI/CSI input
+bytes remain pending until the core queue accepts them, and completed output
+bytes drain to the incumbent callbacks.
+
+The qns-visible cycle position is Python-owned so callbacks can read
+`cpu.cycle_count` reentrantly while the native machine is executing. It
+credits exactly the requested budget and resets to zero as qns requires;
+`step`/`run` still return actual core cycles. Core lifetime-cycle semantics
+remain unchanged. The core instruction trace supplies exact watch hits and
+the compatibility timeline records their qns-visible cycle positions.
+
+`asci_debug_state` returns direct core values for `status`, `cntla`, and
+`tx_data_register`. The core has no public equivalent for the incumbent's
+shift-stage, FIFO-depth, derived-timing, IRQ-internal, and transition-history
+diagnostics; every such field is explicitly documented and returned as
+zero/false, as required by P8.2.
+
+Python compatibility authority:
+
+```text
+> uv run --project crates/z180-py pytest crates/z180-py/tests -q
+.............                                                            [100%]
+13 passed in 0.37s
+```
+
+The test set covers signature parity, real callback-backed instruction
+execution, callback masking/error propagation, reentrant cycle reads,
+reset/budget behavior, register/IRQ/MMU/watch/debug surfaces, and ASCI/CSI
+queue retry and drain behavior. The rebuilt wheel contains `z180/compat.py`
+and passes from an isolated Python 3.11 environment:
+
+```text
+> uv run --refresh-package z180 --isolated --python 3.11 \
+    --with ./target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl \
+    --with pytest pytest crates/z180-py/tests -q
+.............                                                            [100%]
+13 passed in 0.18s
+```
+
+Static and Rust regression authorities remained green:
+
+```text
+> cargo fmt --all -- --check
+
+> cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.24s
+
+> cargo test --workspace
+25 CLI unit + 2 CLI integration + 89 core tests passed
+```
+
+P8.2 is complete pending its commit, push, and CI. P8.3 is next after that
 landing completes.
 
 ## Phase 9 — WASM and TypeScript

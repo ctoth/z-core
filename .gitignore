@@ -1,6 +1,7 @@
 /target/
 /docs/vendor/*.pdf
 *.pyd
+*.pdb
 node_modules/
 /tools/reference/.venv/
 /tools/reference/__pycache__/
