@@ -260,13 +260,7 @@ pub(crate) fn run(args: SstArgs) -> Result<()> {
                 CaseKind::Instruction | CaseKind::Trap => {
                     report.push(run_file(stem, cases, args.ignore_r, args.sabotage_ld)?);
                 }
-                CaseKind::Mmu => report.push(FileReport {
-                    file: stem,
-                    pass: 0,
-                    fail: 0,
-                    unimplemented: cases.len(),
-                    failures: Vec::new(),
-                }),
+                CaseKind::Mmu => report.push(run_mmu_file(stem, cases, args.ignore_r)?),
             }
             continue;
         }
@@ -506,7 +500,7 @@ fn run_file(
 
     for case in cases {
         let expected_ports = case.ports.clone().unwrap_or_default();
-        let (mut cpu, port_script) = machine(expected_ports)?;
+        let (mut cpu, port_script) = machine(expected_ports, 0x1_0000)?;
         load_state(&mut cpu, &case.initial)
             .with_context(|| format!("failed to load initial state for {}", case.name))?;
         let sabotage = sabotage_ld.then(|| inject_reversed_ld(&mut cpu)).flatten();
@@ -521,6 +515,125 @@ fn run_file(
 
         let failure = compare(&cpu, &case, ignore_r)
             .or_else(|| compare_ports(&port_script.borrow(), &case.name));
+        if let Some(failure) = failure {
+            file_report.fail += 1;
+            file_report.failures.push(failure);
+        } else {
+            file_report.pass += 1;
+        }
+    }
+
+    Ok(file_report)
+}
+
+fn run_mmu_file(file: String, cases: Vec<TestCase>, ignore_r: bool) -> Result<FileReport> {
+    let mut file_report = FileReport {
+        file,
+        pass: 0,
+        fail: 0,
+        unimplemented: 0,
+        failures: Vec::new(),
+    };
+
+    for case in cases {
+        let expected_z180 = case
+            .final_state
+            .z180
+            .as_ref()
+            .with_context(|| format!("{} has no final Z180 state", case.name))?;
+        let (mut cpu, port_script) = machine(Vec::new(), 0x10_0000)?;
+        let mut failure = None;
+
+        for (logical_pc, internal_addr, value) in [
+            (0_u16, 0x38_u8, expected_z180.cbr),
+            (3_u16, 0x3a_u8, expected_z180.cbar),
+            (6_u16, 0x39_u8, expected_z180.bbr),
+        ] {
+            let physical_pc = cpu.mmu_translate(logical_pc);
+            cpu.mem_poke(physical_pc, 0xed);
+            cpu.mem_poke(physical_pc + 1, 0x01);
+            cpu.mem_poke(physical_pc + 2, internal_addr);
+            cpu.set_reg(Reg::PC, logical_pc);
+            cpu.set_reg(Reg::BC, u16::from(value) << 8);
+            let _ = cpu.step();
+
+            let actual = cpu.io_reg_peek(internal_addr);
+            if actual != value {
+                failure = Some(Failure {
+                    test: case.name.clone(),
+                    field: format!("z180.io[{internal_addr:02x}]"),
+                    expected: format!("{value:02x}"),
+                    actual: format!("{actual:02x}"),
+                });
+                break;
+            }
+        }
+
+        if failure.is_none() {
+            let expected_setup = vec![
+                PortEvent(0x0038, expected_z180.cbr, PortDirection::W),
+                PortEvent(0x003a, expected_z180.cbar, PortDirection::W),
+                PortEvent(0x0039, expected_z180.bbr, PortDirection::W),
+            ];
+            let actual_setup = port_script.borrow().observed.clone();
+            if actual_setup != expected_setup {
+                failure = Some(Failure {
+                    test: case.name.clone(),
+                    field: "mmu.setup_ports".to_owned(),
+                    expected: format!("{expected_setup:?}"),
+                    actual: format!("{actual_setup:?}"),
+                });
+            }
+        }
+
+        if failure.is_none() {
+            port_script.borrow_mut().observed.clear();
+            for (index, probe) in case
+                .mmu_probes
+                .as_ref()
+                .expect("generated MMU validation requires probes")
+                .iter()
+                .enumerate()
+            {
+                let actual_physical = cpu.mmu_translate(probe.logical);
+                if actual_physical != probe.expected_physical {
+                    failure = Some(Failure {
+                        test: case.name.clone(),
+                        field: format!("mmu_probes[{index}].expected_physical"),
+                        expected: format!("{:05x}", probe.expected_physical),
+                        actual: format!("{actual_physical:05x}"),
+                    });
+                    break;
+                }
+
+                let instruction_logical = probe.logical ^ 1;
+                let instruction_physical = cpu.mmu_translate(instruction_logical);
+                cpu.mem_poke(instruction_physical, 0x7e);
+                cpu.mem_poke(probe.expected_physical, probe.value);
+                cpu.set_reg(Reg::PC, instruction_logical);
+                cpu.set_reg(Reg::HL, probe.logical);
+                cpu.set_reg(Reg::AF, u16::from(!probe.value) << 8);
+                let _ = cpu.step();
+                let actual_value = cpu.reg(Reg::AF).to_be_bytes()[0];
+                if actual_value != probe.value {
+                    failure = Some(Failure {
+                        test: case.name.clone(),
+                        field: format!("mmu_probes[{index}].value"),
+                        expected: format!("{:02x}", probe.value),
+                        actual: format!("{actual_value:02x}"),
+                    });
+                    break;
+                }
+            }
+        }
+
+        if failure.is_none() {
+            load_state(&mut cpu, &case.initial)
+                .with_context(|| format!("failed to restore initial state for {}", case.name))?;
+            failure = compare(&cpu, &case, ignore_r)
+                .or_else(|| compare_ports(&port_script.borrow(), &case.name));
+        }
+
         if let Some(failure) = failure {
             file_report.fail += 1;
             file_report.failures.push(failure);
@@ -565,11 +678,14 @@ fn reversed_ld_opcode(opcode: u8) -> Option<u8> {
         .then_some(0x40 | ((opcode & 0x07) << 3) | ((opcode >> 3) & 0x07))
 }
 
-fn machine(expected_ports: Vec<PortEvent>) -> Result<(Z180<ScriptedBus>, Rc<RefCell<PortScript>>)> {
+fn machine(
+    expected_ports: Vec<PortEvent>,
+    ram_size: u32,
+) -> Result<(Z180<ScriptedBus>, Rc<RefCell<PortScript>>)> {
     let config = MachineConfig {
         regions: vec![RegionDef {
             base: 0,
-            size: 0x1_0000,
+            size: ram_size,
             kind: RegionKind::Ram,
         }],
         ..MachineConfig::default()
@@ -581,7 +697,7 @@ fn machine(expected_ports: Vec<PortEvent>) -> Result<(Z180<ScriptedBus>, Rc<RefC
     let bus = ScriptedBus {
         script: Rc::clone(&script),
     };
-    let cpu = Z180::new(config, bus).context("flat 64K SST machine configuration is invalid")?;
+    let cpu = Z180::new(config, bus).context("flat SST machine configuration is invalid")?;
     Ok((cpu, script))
 }
 
@@ -662,6 +778,9 @@ fn compare(cpu: &Z180<ScriptedBus>, case: &TestCase, ignore_r: bool) -> Option<F
     if let Some(expected_z180) = &expected.z180 {
         let z180_checks = [
             difference_u8("z180.itc", expected_z180.itc, cpu.itc()),
+            difference_u8("z180.cbr", expected_z180.cbr, cpu.io_reg_peek(0x38)),
+            difference_u8("z180.bbr", expected_z180.bbr, cpu.io_reg_peek(0x39)),
+            difference_u8("z180.cbar", expected_z180.cbar, cpu.io_reg_peek(0x3a)),
             difference_u8(
                 "z180.sleeping",
                 u8::from(expected_z180.sleeping),
@@ -802,7 +921,7 @@ mod tests {
 
     #[test]
     fn comparison_masks_xy_flags_and_r_high_bit() {
-        let (mut cpu, _) = machine(Vec::new()).expect("valid test machine");
+        let (mut cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
         cpu.set_reg(Reg::AF, pair(0x12, 0x28));
         cpu.set_reg(Reg::AF2, pair(0x34, 0x28));
         cpu.set_reg(Reg::IR, pair(0x56, 0x80));
@@ -821,7 +940,7 @@ mod tests {
 
     #[test]
     fn comparison_reports_the_first_differing_field() {
-        let (cpu, _) = machine(Vec::new()).expect("valid test machine");
+        let (cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
         let case = standard_case(
             "wrong pc and sp",
             TestState {
@@ -839,7 +958,7 @@ mod tests {
 
     #[test]
     fn comparison_uses_the_generated_case_flag_mask() {
-        let (mut cpu, _) = machine(Vec::new()).expect("valid test machine");
+        let (mut cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
         cpu.set_reg(Reg::AF, pair(0, 0x80));
         let mut case = standard_case("masked documented flags", zero_state());
         case.flags_mask = Some(0x42);
@@ -918,7 +1037,7 @@ mod tests {
 
     #[test]
     fn generated_comparison_includes_itc_and_sleeping() {
-        let (cpu, _) = machine(Vec::new()).expect("valid test machine");
+        let (cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
         let mut case = generated_case(CaseKind::Instruction, None);
         let expected_z180 = case
             .final_state
@@ -930,6 +1049,42 @@ mod tests {
 
         let failure = compare(&cpu, &case, false).expect("ITC mismatch must fail");
         assert_eq!(failure.field, "z180.itc");
+    }
+
+    #[test]
+    fn generated_mmu_executes_register_program_and_all_logical_reads() {
+        let probes = (0_u16..16)
+            .map(|page| {
+                let logical = (page << 12) | 0x0123;
+                let relocation = if page < 4 {
+                    0_u32
+                } else if page < 10 {
+                    0x40
+                } else {
+                    0x80
+                };
+                MmuProbe {
+                    logical,
+                    expected_physical: ((relocation + u32::from(page)) & 0xff) << 12 | 0x0123,
+                    value: page as u8 ^ 0xa5,
+                }
+            })
+            .collect();
+        let mut case = generated_case(CaseKind::Mmu, Some(probes));
+        let final_z180 = case
+            .final_state
+            .z180
+            .as_mut()
+            .expect("generated Z180 state");
+        final_z180.cbr = 0x80;
+        final_z180.bbr = 0x40;
+        final_z180.cbar = 0xa4;
+
+        let report = run_mmu_file("mmu".to_owned(), vec![case], false)
+            .expect("generated MMU runner must complete");
+        assert_eq!(report.pass, 1);
+        assert_eq!(report.fail, 0);
+        assert_eq!(report.unimplemented, 0);
     }
 
     fn standard_case(name: &str, final_state: TestState) -> TestCase {

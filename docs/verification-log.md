@@ -55,6 +55,7 @@
 | SLP is ED76, enters sleep, and does not affect flags | Special Control Instructions, Table 47, p. 235; ED op-code map, Table 50, p. 250 | 2026-07-20 |
 | CBAR bits 7–4 are CA and bits 3–0 are BA; CBR and BBR are 8-bit 4 KiB physical bases; reset values are CBAR=F0h and CBR=BBR=00h | MMU, CBAR/CBR/BBR register descriptions, pp. 60–63 | 2026-07-20 |
 | Logical pages below BA are Common Area 0 with physical base zero, pages from BA through the page before CA are Bank Area using BBR, and pages from CA upward are Common Area 1 using CBR; the selected 8-bit base is added to logical address bits 15–12 and bits 11–0 pass through | MMU, Figures 27–30, pp. 60–64 | 2026-07-20 |
+| A write to CBR, BBR, or CBAR affects address translation beginning with the machine cycle immediately following the internal-I/O write cycle | MMU, CBR/BBR/CBAR register descriptions, pp. 61–63 | 2026-07-21 |
 | ICR bits 7–6 relocate the 64-byte internal I/O window and reset to 00b, selecting addresses 0000h–003Fh; reset-state external Phase 1 ports therefore begin at 0040h | I/O Addressing, ICR and Figure 22, pp. 42–44 | 2026-07-20 |
 | ITC bit 7 is TRAP, set only by an undefined opcode fetch and clearable by writing zero; bit 6 is read-only UFO; bits 2–0 are ITE2–ITE0; reset ITC is 01h | Interrupts, ITC register, pp. 67–68 | 2026-07-20 |
 | TRAP is non-maskable, leaves IEF1 and IEF2 unchanged, stacks the current PC high byte at SP-1 and low byte at SP-2, and vectors to logical 0000h | Interrupts, Table 8 and TRAP Interrupt, pp. 69–72 | 2026-07-20 |

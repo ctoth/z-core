@@ -1437,6 +1437,79 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 The format check completed with no output. P5.2 is the next unchecked task;
 Gate G5 remains pending until all four Phase 5 tasks are complete.
 
+### P5.2 — MMU translation and generated MMU execution (2026-07-21)
+
+`Z180` now owns a 16-entry logical-page to physical-base table computed from
+CBR, BBR, and CBAR at construction, reset, and every write to those three
+internal registers. `mmu_translate` is one indexed base lookup plus the
+12-bit page offset. Every instruction fetch and memory operand continues
+through the existing `read_logical`/`write_logical` ownership path and is now
+translated; physical `mem_peek`/`mem_poke` remain host debugging APIs.
+
+The generated MMU runner uses a 1 MiB RAM map and programs CBR, CBAR, then BBR
+with ordinary `OUT0 (n),B` instructions. It observes the required duplicate
+external writes for all three internal-I/O cycles. Each of the 16 probes is
+checked against `mmu_translate` and then read through a real translated
+`LD A,(HL)` instruction whose fetch is itself translated. The runner restores
+the generated ordinary CPU state afterward, leaves the programmed MMU state
+intact, and compares CBR/BBR/CBAR with the remaining `z180` state.
+
+The fixed core tests cover reset identity/restoration, immediate write
+effects, real internal-I/O programming, and translated fetch/read/write paths.
+The Phase 5 proptest covers arbitrary CBR/BBR/CBAR/logical inputs against an
+independent closed-form formula.
+
+Focused core authority:
+
+```text
+> cargo test -p z180-core mmu -- --nocapture
+   Compiling z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+     Running unittests src\lib.rs (target\debug\deps\z180_core-5f3557b25cb550c6.exe)
+
+running 3 tests
+test tests::mmu_reset_and_internal_io_writes_recompute_all_pages ... ok
+test tests::mmu_translates_instruction_fetches_reads_and_writes ... ok
+test tests::mmu_translation_array_matches_closed_form ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.70s
+```
+
+Generated 200-case MMU authority after the final runner hardening:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst --only mmu
+   Compiling z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running `target\debug\z180-cli.exe sst --dir tests/z180-sst --only mmu`
+PASS mmu: pass=200 fail=0 unimplemented=0
+SUMMARY pass=200 fail=0 unimplemented=0 excluded=0
+```
+
+Final workspace authority:
+
+```text
+> cargo test --workspace
+running 17 tests
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+running 35 tests
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+
+> cargo fmt --all -- --check
+```
+
+The format check completed with no output. P5.3, interrupt machinery, is the
+next unchecked task; Gate G5 remains pending until P5.3 and P5.4 complete.
+
 ## Phase 6 — On-chip peripherals
 
 ## Phase 7 — Debug, trace, save-state, disassembler

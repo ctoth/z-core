@@ -3,6 +3,9 @@ use crate::Variant;
 pub(crate) const IO_REGISTER_COUNT: usize = 0x40;
 pub(crate) const DCNTL: usize = 0x32;
 pub(crate) const ITC: usize = 0x34;
+pub(crate) const CBR: usize = 0x38;
+pub(crate) const BBR: usize = 0x39;
+pub(crate) const CBAR: usize = 0x3a;
 pub(crate) const ICR: usize = 0x3f;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +25,7 @@ pub(crate) enum WriteEffect {
     None,
     Dstat,
     Itc,
+    Mmu,
     Rdr,
 }
 
@@ -565,7 +569,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::Mmu,
     },
     // 39 BBR
     IoRegSpec {
@@ -574,7 +578,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::Mmu,
     },
     // 3A CBAR
     IoRegSpec {
@@ -583,7 +587,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::Mmu,
     },
     // 3B reserved
     IoRegSpec {

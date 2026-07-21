@@ -13,7 +13,9 @@ mod registers;
 pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
-use ioregs::{DCNTL, ICR, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, ReadEffect, WriteEffect};
+use ioregs::{
+    BBR, CBAR, CBR, DCNTL, ICR, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, ReadEffect, WriteEffect,
+};
 use memory::Memory;
 use optable::{HALT_IDLE_CYCLES, SECOND_OPCODE_TRAP_CYCLES, THIRD_OPCODE_TRAP_CYCLES};
 use registers::Registers;
@@ -52,6 +54,7 @@ pub struct Z180<B: HostBus> {
     cycle_count: u64,
     variant: Variant,
     io_regs: [u8; IO_REGISTER_COUNT],
+    mmu_pages: [u32; 16],
     timing_branch_taken: bool,
     timing_repeat_iterations: u16,
     timing_memory_waits: u32,
@@ -73,7 +76,7 @@ impl<B: HostBus> Z180<B> {
                 io_regs[index] = spec.reset;
             }
         }
-        Ok(Self {
+        let mut cpu = Self {
             registers: Registers::default(),
             memory: Memory::new(&config)?,
             bus,
@@ -81,6 +84,7 @@ impl<B: HostBus> Z180<B> {
             cycle_count: 0,
             variant: config.variant,
             io_regs,
+            mmu_pages: [0; 16],
             timing_branch_taken: false,
             timing_repeat_iterations: 0,
             timing_memory_waits: 0,
@@ -92,7 +96,9 @@ impl<B: HostBus> Z180<B> {
             ei_shadow: false,
             interrupt_mode: 0,
             events: Vec::new(),
-        })
+        };
+        cpu.recompute_mmu_pages();
+        Ok(cpu)
     }
 
     pub fn reset(&mut self) {
@@ -105,6 +111,7 @@ impl<B: HostBus> Z180<B> {
                 0
             };
         }
+        self.recompute_mmu_pages();
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
         self.timing_memory_waits = 0;
@@ -268,6 +275,11 @@ impl<B: HostBus> Z180<B> {
         match spec.read_effect {
             ReadEffect::None => self.io_regs[index] & spec.read_mask,
         }
+    }
+
+    pub fn mmu_translate(&self, logical: u16) -> u32 {
+        let page = usize::from(logical >> 12);
+        self.mmu_pages[page] + u32::from(logical & 0x0fff)
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
@@ -1447,14 +1459,16 @@ impl<B: HostBus> Z180<B> {
         self.timing_memory_waits = self
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
-        self.memory.read(&mut self.bus, u32::from(logical))
+        let physical = self.mmu_translate(logical);
+        self.memory.read(&mut self.bus, physical)
     }
 
     fn write_logical(&mut self, logical: u16, value: u8) {
         self.timing_memory_waits = self
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
-        self.memory.write(&mut self.bus, u32::from(logical), value);
+        let physical = self.mmu_translate(logical);
+        self.memory.write(&mut self.bus, physical, value);
     }
 
     fn internal_io_index(&self, port: u16) -> Option<usize> {
@@ -1497,7 +1511,9 @@ impl<B: HostBus> Z180<B> {
         }
         let old = self.io_regs[index];
         self.io_regs[index] = match spec.write_effect {
-            WriteEffect::None => (old & !spec.write_mask) | (value & spec.write_mask),
+            WriteEffect::None | WriteEffect::Mmu => {
+                (old & !spec.write_mask) | (value & spec.write_mask)
+            }
             WriteEffect::Rdr => {
                 let status_index = if index == 0x08 { 0x04 } else { 0x05 };
                 if self.variant == Variant::Z8S180 && self.io_regs[status_index] & 0x80 != 0 {
@@ -1528,6 +1544,27 @@ impl<B: HostBus> Z180<B> {
                 trap | ufo | (value & 0x07)
             }
         };
+        if spec.write_effect == WriteEffect::Mmu {
+            self.recompute_mmu_pages();
+        }
+    }
+
+    fn recompute_mmu_pages(&mut self) {
+        let ba = usize::from(self.io_regs[CBAR] & 0x0f);
+        let ca = usize::from(self.io_regs[CBAR] >> 4);
+        let bank_base = u32::from(self.io_regs[BBR]);
+        let common_one_base = u32::from(self.io_regs[CBR]);
+
+        for (page, physical_base) in self.mmu_pages.iter_mut().enumerate() {
+            let relocation = if page < ba {
+                0
+            } else if page < ca {
+                bank_base
+            } else {
+                common_one_base
+            };
+            *physical_base = ((relocation + page as u32) & 0xff) << 12;
+        }
     }
 
     fn wait_cycles(&self) -> u32 {
@@ -1544,6 +1581,8 @@ impl<B: HostBus> Z180<B> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -1612,6 +1651,105 @@ mod tests {
         };
         Z180::new(config, RecordingBus::default())
             .expect("flat recording configuration must be valid")
+    }
+
+    fn mmu_machine() -> Z180<NullBus> {
+        let config = MachineConfig {
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x10_0000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        Z180::new(config, NullBus).expect("1 MiB RAM configuration must be valid")
+    }
+
+    #[test]
+    fn mmu_reset_and_internal_io_writes_recompute_all_pages() {
+        let mut cpu = mmu_machine();
+        for logical_page in 0_u16..16 {
+            let logical = (logical_page << 12) | 0x0a5;
+            assert_eq!(cpu.mmu_translate(logical), u32::from(logical));
+        }
+
+        for (pc, register, value) in [(0_u16, CBR, 0x80_u8), (3, CBAR, 0xa4_u8), (6, BBR, 0x40_u8)]
+        {
+            let physical = cpu.mmu_translate(pc);
+            cpu.mem_poke(physical, 0xed);
+            cpu.mem_poke(physical + 1, 0x01);
+            cpu.mem_poke(physical + 2, register as u8);
+            cpu.set_reg(Reg::BC, u16::from(value) << 8);
+            assert_ne!(cpu.step(), 0);
+        }
+
+        assert_eq!(cpu.io_reg_peek(CBR as u8), 0x80);
+        assert_eq!(cpu.io_reg_peek(BBR as u8), 0x40);
+        assert_eq!(cpu.io_reg_peek(CBAR as u8), 0xa4);
+        assert_eq!(cpu.mmu_translate(0x30a5), 0x030a5);
+        assert_eq!(cpu.mmu_translate(0x40a5), 0x440a5);
+        assert_eq!(cpu.mmu_translate(0x90a5), 0x490a5);
+        assert_eq!(cpu.mmu_translate(0xa0a5), 0x8a0a5);
+
+        cpu.reset();
+        assert_eq!(cpu.io_reg_peek(CBR as u8), 0x00);
+        assert_eq!(cpu.io_reg_peek(BBR as u8), 0x00);
+        assert_eq!(cpu.io_reg_peek(CBAR as u8), 0xf0);
+        for logical_page in 0_u16..16 {
+            let logical = (logical_page << 12) | 0x0a5;
+            assert_eq!(cpu.mmu_translate(logical), u32::from(logical));
+        }
+    }
+
+    #[test]
+    fn mmu_translates_instruction_fetches_reads_and_writes() {
+        let mut cpu = mmu_machine();
+        cpu.write_internal_io(CBR, 0x10);
+        cpu.write_internal_io(CBAR, 0x00);
+
+        cpu.mem_poke(0x1_0000, 0x7e);
+        cpu.mem_poke(0x1_2000, 0x5a);
+        cpu.set_reg(Reg::HL, 0x2000);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.reg(Reg::AF) >> 8, 0x5a);
+
+        cpu.mem_poke(0x1_0001, 0x77);
+        cpu.set_reg(Reg::PC, 1);
+        cpu.set_reg(Reg::HL, 0x3000);
+        cpu.set_reg(Reg::AF, 0xa500);
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.mem_peek(0x1_3000), 0xa5);
+        assert_eq!(cpu.mem_peek(0x3000), 0x00);
+    }
+
+    proptest! {
+        #[test]
+        fn mmu_translation_array_matches_closed_form(
+            cbr in any::<u8>(),
+            bbr in any::<u8>(),
+            cbar in any::<u8>(),
+            logical in any::<u16>(),
+        ) {
+            let mut cpu = mmu_machine();
+            cpu.write_internal_io(CBR, cbr);
+            cpu.write_internal_io(BBR, bbr);
+            cpu.write_internal_io(CBAR, cbar);
+
+            let page = u32::from(logical >> 12);
+            let ba = u32::from(cbar & 0x0f);
+            let ca = u32::from(cbar >> 4);
+            let relocation = if page < ba {
+                0
+            } else if page < ca {
+                u32::from(bbr)
+            } else {
+                u32::from(cbr)
+            };
+            let expected = (((relocation + page) & 0xff) << 12)
+                | u32::from(logical & 0x0fff);
+
+            prop_assert_eq!(cpu.mmu_translate(logical), expected);
+        }
     }
 
     #[test]
