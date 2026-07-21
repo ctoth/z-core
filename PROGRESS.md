@@ -77,6 +77,16 @@ reference-generated Z180 instruction/TRAP/MMU cases, generator determinism and
 schema gates, and optional non-gating incumbent comparisons only if a complete
 black-box state API later exists. No emulator source access is authorized.
 
+### P1.5 flag-schema correction (2026-07-20)
+
+Direct reading of UM0050 Table 46 established that OTIM/OTDM define Z from the
+post-decrement B value and N from the output byte, but mark S, H, P/V, and C as
+affected without defining their resulting values. The corpus schema now carries
+`flags_mask`: `0xD7` for normally defined documented flags and `0x42` for
+OTIM/OTDM. This prevents a first-party reference function from inventing values
+that the manufacturer did not specify. The Appendix C reset-state ITC value was
+also corrected from `0x00` to the verified `0x01` reset value.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP

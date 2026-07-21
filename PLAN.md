@@ -318,7 +318,10 @@ Where this plan turns out to be wrong, the manual wins.
 4. **Undocumented flag bits (XF/YF, bits 5 and 3 of F)** are not guaranteed to
    match Z80 behavior. Policy: implement the documented six flags rigorously;
    set XF/YF from the conventional Z80 rule where cheap (result bits 5/3),
-   and MASK bits 3 and 5 in all external conformance comparisons.
+   and MASK bits 3 and 5 in all external conformance comparisons. Where
+   UM0050 marks a documented flag as affected but supplies no resulting-value
+   rule (OTIM/OTDM S, H, P/V, and C), the generated case's `flags_mask` also
+   excludes that flag rather than inventing a value.
 5. **On-chip peripherals** occupy a 64-byte internal I/O window (3.6),
    relocatable via ICR.
 6. **MMU** translates every logical 16-bit address to 20-bit physical (3.3).
@@ -554,6 +557,8 @@ Tasks:
      apply exactly one independent reference transition → record final
      state. I/O instructions also record deterministic port reads/writes in
      the SST `ports` format so their externally visible behavior is tested.
+     Each case records the documented F-bit comparison mask derived from
+     3.1.4; it is `0xD7` except OTIM/OTDM, whose UM-defined mask is `0x42`.
      Phase 1 I/O strategies select ports outside the reset-state 64-byte
      internal window; internal-register behavior belongs to Phase 5.
    - TRAP cases: a representative sample (≥ 50) of undefined opcodes across
@@ -621,7 +626,8 @@ Tasks:
    crash).
 7. **z180-sst runner mode**: `z180-cli sst --dir tests/z180-sst` shares all
    runner code with task 3, loads the Appendix C `z180` state, supplies the
-   recorded deterministic port reads, compares port writes, dispatches
+   recorded deterministic port reads, compares port writes and F through the
+   case's `flags_mask`, dispatches
    `instruction`/`trap`/`mmu` case kinds (including all 16 MMU probes), and
    adds a `--census` report of case counts per opcode and special family.
 
@@ -801,8 +807,9 @@ Tasks:
    `strategies.py` from Phase 1):
    - Property A (single instruction): for any Z180-added opcode and generated
      initial state, z-core and the independent UM0050 transition produce
-     identical final state, touched memory, and I/O events (F masked per
-     3.1.4). Shared Z80 instructions remain covered by SST.
+     identical final state, touched memory, and I/O events (F masked per the
+     generated case's `flags_mask` from 3.1.4). Shared Z80 instructions remain
+     covered by SST.
    - Property B (short sequences): for any generated sequence of up to 32
      reference-modeled Z180 instructions in a 4K arena (HALT/SLP excluded),
      final states match instruction-by-instruction.
@@ -916,16 +923,20 @@ inputs and write events are expected outputs. Each case additionally has:
 {
   "kind": "instruction",
   "seed": 12345,
+  "flags_mask": 215,
   "disputed": false,
   "dispute_note": ""
 }
 ```
 
 `kind` is `instruction` for opcode cases and `trap` for undefined-opcode
-cases. Every generated case adds
-`"z180": {"itc": 0, "cbr": 0, "bbr": 0, "cbar": 240,
-"sleeping": false}` to both `initial` and `final`; this makes SLP state and
-TRAP/MMU control state observable.
+cases. `flags_mask` selects the F bits whose resulting values UM0050 defines:
+215 (`0xD7`, the documented six flags) for every case except OTIM/OTDM, which
+use 66 (`0x42`, Z and N). Every generated initial state adds the reset-state
+defaults `"z180": {"itc": 1, "cbr": 0, "bbr": 0, "cbar": 240,
+"sleeping": false}`. Its final state contains the reference transition's
+resulting `z180` values; this makes SLP state and TRAP/MMU control state
+observable.
 
 MMU cases use `kind: "mmu"`, the same common metadata and initial/final state,
 `z180` in both states, and exactly 16 ordered probes:
