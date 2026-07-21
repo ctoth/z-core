@@ -77,6 +77,35 @@ boundary as PRT and `cycle_count()`, and continues while ICR selects I/O STOP.
 Reads do not change either its count or divider phase. RESET restores `FFh`
 and restarts the divider phase.
 
+### Asynchronous serial channels
+
+ASCI0 and ASCI1 schedule complete byte frames at the common `finish_step`
+boundary. For the standard internal baud-rate generator, one bit consumes
+
+```text
+(10 + 20 * PS) * 2^SS * clock_mode
+```
+
+phi cycles, where `PS` is zero or one and `clock_mode` is 16 or 64. A frame
+contains one start bit, seven or eight data bits, a parity/multiprocessor bit
+when selected, and one or two stop bits. Receive RDRF and transmit completion
+therefore become observable only after `frame_bits * bit_cycles` elapsed phi
+cycles. Divider selection is captured when a byte enters its shift stage, so
+later register writes affect the next frame rather than retiming a frame in
+progress.
+
+In Z8S180 BRG mode, one bit instead consumes
+`2 * (ASTC + 2) * clock_mode` phi cycles. X1 selects a one-phi bit clock in
+place of `/16` or `/64`. Standard-divisor tests pin 8N1 `/10,/16,SS=0` at
+1600 cycles, 8-parity-2-stop `/30,/16,SS=2` at 23040 cycles, and 7N1
+`/10,/64,SS=1` at 11520 cycles; an ASTC=3, X1, 8N1 frame is pinned at 100
+cycles.
+
+SS=7 selects an external CKA clock. The fixed Phase 1 host API has no CKA
+edge input, so such a byte may occupy the hardware shift stage but system-phi
+progress cannot complete it. No external frequency is inferred and no
+substitute clock API is introduced.
+
 ## Intentional approximations
 
 ### Bus phases

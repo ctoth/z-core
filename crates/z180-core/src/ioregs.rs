@@ -1,6 +1,14 @@
 use crate::Variant;
 
 pub(crate) const IO_REGISTER_COUNT: usize = 0x40;
+pub(crate) const CNTLA0: usize = 0x00;
+pub(crate) const CNTLB0: usize = 0x02;
+pub(crate) const STAT0: usize = 0x04;
+pub(crate) const STAT1: usize = 0x05;
+pub(crate) const TDR0: usize = 0x06;
+pub(crate) const TDR1: usize = 0x07;
+pub(crate) const RDR0: usize = 0x08;
+pub(crate) const RDR1: usize = 0x09;
 pub(crate) const TMDR0L: usize = 0x0c;
 pub(crate) const TMDR0H: usize = 0x0d;
 pub(crate) const RLDR0L: usize = 0x0e;
@@ -11,6 +19,10 @@ pub(crate) const TMDR1H: usize = 0x15;
 pub(crate) const RLDR1L: usize = 0x16;
 pub(crate) const RLDR1H: usize = 0x17;
 pub(crate) const FRC: usize = 0x18;
+pub(crate) const ASTC0L: usize = 0x1a;
+pub(crate) const ASTC0H: usize = 0x1b;
+pub(crate) const ASTC1L: usize = 0x1c;
+pub(crate) const ASTC1H: usize = 0x1d;
 pub(crate) const DCNTL: usize = 0x32;
 pub(crate) const IL: usize = 0x33;
 pub(crate) const ITC: usize = 0x34;
@@ -28,6 +40,9 @@ pub(crate) enum Availability {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReadEffect {
+    AsciCntlb,
+    AsciRdr,
+    AsciStat,
     None,
     Tcr,
     TmdrHigh,
@@ -36,9 +51,15 @@ pub(crate) enum ReadEffect {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WriteEffect {
+    AsciAsext,
+    AsciCntla,
+    AsciCntlb,
+    AsciStat,
+    AsciTdr,
     None,
     Dstat,
     Itc,
+    Icr,
     Mmu,
     Rdr,
     Tcr,
@@ -81,7 +102,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::AsciCntla,
     },
     // 01 CNTLA1
     IoRegSpec {
@@ -90,7 +111,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::AsciCntla,
     },
     // 02 CNTLB0
     IoRegSpec {
@@ -98,8 +119,8 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::AsciCntlb,
+        write_effect: WriteEffect::AsciCntlb,
     },
     // 03 CNTLB1
     IoRegSpec {
@@ -107,8 +128,8 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::AsciCntlb,
+        write_effect: WriteEffect::AsciCntlb,
     },
     // 04 STAT0
     IoRegSpec {
@@ -116,8 +137,8 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0x09,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::AsciStat,
+        write_effect: WriteEffect::AsciStat,
     },
     // 05 STAT1
     IoRegSpec {
@@ -125,8 +146,8 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0x0d,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::AsciStat,
+        write_effect: WriteEffect::AsciStat,
     },
     // 06 TDR0
     IoRegSpec {
@@ -135,7 +156,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::AsciTdr,
     },
     // 07 TDR1
     IoRegSpec {
@@ -144,7 +165,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xff,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::AsciTdr,
     },
     // 08 RDR0
     IoRegSpec {
@@ -152,7 +173,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
+        read_effect: ReadEffect::AsciRdr,
         write_effect: WriteEffect::Rdr,
     },
     // 09 RDR1
@@ -161,7 +182,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
+        read_effect: ReadEffect::AsciRdr,
         write_effect: WriteEffect::Rdr,
     },
     // 0A CNTR
@@ -243,7 +264,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xfd,
         availability: S180,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::AsciAsext,
     },
     // 13 ASEXT1 (Z8S180)
     IoRegSpec {
@@ -252,7 +273,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0x9d,
         availability: S180,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::AsciAsext,
     },
     // 14 TMDR1L
     IoRegSpec {
@@ -648,6 +669,6 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0xe0,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::Icr,
     },
 ];

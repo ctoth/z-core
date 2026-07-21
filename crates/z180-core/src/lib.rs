@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{collections::VecDeque, vec::Vec};
 
 mod ioregs;
 mod memory;
@@ -14,8 +14,9 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use ioregs::{
-    BBR, CBAR, CBR, DCNTL, FRC, ICR, IL, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RLDR0H, RLDR0L,
-    RLDR1H, RLDR1L, ReadEffect, TCR, TMDR0H, TMDR0L, TMDR1H, TMDR1L, WriteEffect,
+    ASTC0H, ASTC0L, ASTC1H, ASTC1L, BBR, CBAR, CBR, CNTLA0, CNTLB0, DCNTL, FRC, ICR, IL,
+    IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RDR0, RDR1, RLDR0H, RLDR0L, RLDR1H, RLDR1L, ReadEffect,
+    STAT0, STAT1, TCR, TDR0, TDR1, TMDR0H, TMDR0L, TMDR1H, TMDR1L, WriteEffect,
 };
 use memory::Memory;
 use optable::{
@@ -102,6 +103,19 @@ pub struct Z180<B: HostBus> {
     prt_high_latch: [u8; 2],
     prt_high_latch_valid: [bool; 2],
     prt_clear_armed: u8,
+    asci_cts: [bool; 2],
+    asci_dcd: [bool; 2],
+    asci_dcd_latched: bool,
+    asci_dcd_irq_pending: bool,
+    asci_tdr_full: [bool; 2],
+    asci_tx_shift: [Option<u8>; 2],
+    asci_tx_cycles: [u64; 2],
+    asci_tx_clocked: [bool; 2],
+    asci_tx_output: [VecDeque<u8>; 2],
+    asci_rx_shift: [Option<u8>; 2],
+    asci_rx_cycles: [u64; 2],
+    asci_rx_clocked: [bool; 2],
+    asci_rx_fifo: [VecDeque<u8>; 2],
     events: Vec<Event>,
 }
 
@@ -141,6 +155,19 @@ impl<B: HostBus> Z180<B> {
             prt_high_latch: [0; 2],
             prt_high_latch_valid: [false; 2],
             prt_clear_armed: 0,
+            asci_cts: [false; 2],
+            asci_dcd: [false; 2],
+            asci_dcd_latched: false,
+            asci_dcd_irq_pending: false,
+            asci_tdr_full: [false; 2],
+            asci_tx_shift: [None; 2],
+            asci_tx_cycles: [0; 2],
+            asci_tx_clocked: [false; 2],
+            asci_tx_output: core::array::from_fn(|_| VecDeque::new()),
+            asci_rx_shift: [None; 2],
+            asci_rx_cycles: [0; 2],
+            asci_rx_clocked: [false; 2],
+            asci_rx_fifo: core::array::from_fn(|_| VecDeque::new()),
             events: Vec::new(),
         };
         cpu.recompute_mmu_pages();
@@ -150,6 +177,12 @@ impl<B: HostBus> Z180<B> {
     pub fn reset(&mut self) {
         self.registers = Registers::default();
         self.instruction_pc = 0;
+        let asci_data = [
+            self.io_regs[TDR0],
+            self.io_regs[TDR1],
+            self.io_regs[RDR0],
+            self.io_regs[RDR1],
+        ];
         for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
             self.io_regs[index] = if spec.is_available(self.variant) {
                 spec.reset
@@ -157,6 +190,10 @@ impl<B: HostBus> Z180<B> {
                 0
             };
         }
+        self.io_regs[TDR0] = asci_data[0];
+        self.io_regs[TDR1] = asci_data[1];
+        self.io_regs[RDR0] = asci_data[2];
+        self.io_regs[RDR1] = asci_data[3];
         self.recompute_mmu_pages();
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
@@ -177,6 +214,21 @@ impl<B: HostBus> Z180<B> {
         self.prt_high_latch = [0; 2];
         self.prt_high_latch_valid = [false; 2];
         self.prt_clear_armed = 0;
+        self.asci_cts = [false; 2];
+        self.asci_dcd = [false; 2];
+        self.asci_dcd_latched = false;
+        self.asci_dcd_irq_pending = false;
+        self.asci_tdr_full = [false; 2];
+        self.asci_tx_shift = [None; 2];
+        self.asci_tx_cycles = [0; 2];
+        self.asci_tx_clocked = [false; 2];
+        self.asci_rx_shift = [None; 2];
+        self.asci_rx_cycles = [0; 2];
+        self.asci_rx_clocked = [false; 2];
+        for channel in 0..2 {
+            self.asci_tx_output[channel].clear();
+            self.asci_rx_fifo[channel].clear();
+        }
         self.events.clear();
     }
 
@@ -328,10 +380,59 @@ impl<B: HostBus> Z180<B> {
             return 0;
         }
         match spec.read_effect {
-            ReadEffect::None | ReadEffect::Tcr | ReadEffect::TmdrHigh | ReadEffect::TmdrLow => {
-                self.io_regs[index] & spec.read_mask
+            ReadEffect::AsciCntlb => self.asci_cntlb_value(index),
+            ReadEffect::AsciStat => self.asci_status_value(index - STAT0),
+            ReadEffect::AsciRdr
+            | ReadEffect::None
+            | ReadEffect::Tcr
+            | ReadEffect::TmdrHigh
+            | ReadEffect::TmdrLow => self.io_regs[index] & spec.read_mask,
+        }
+    }
+
+    pub fn asci_rx_push(&mut self, ch: usize, byte: u8) -> bool {
+        if ch >= 2 || !self.asci_receiver_enabled(ch) || self.asci_rx_shift[ch].is_some() {
+            return false;
+        }
+
+        self.asci_rx_shift[ch] = Some(byte);
+        if let Some(cycles) = self.asci_frame_cycles(ch) {
+            self.asci_rx_cycles[ch] = cycles;
+            self.asci_rx_clocked[ch] = true;
+        } else {
+            self.asci_rx_cycles[ch] = 0;
+            self.asci_rx_clocked[ch] = false;
+        }
+        true
+    }
+
+    pub fn asci_tx_pop(&mut self, ch: usize) -> Option<u8> {
+        self.asci_tx_output.get_mut(ch)?.pop_front()
+    }
+
+    pub fn set_asci_cts(&mut self, ch: usize, level: bool) {
+        let Some(cts) = self.asci_cts.get_mut(ch) else {
+            return;
+        };
+        *cts = level;
+        self.update_asci_interrupt_requests();
+    }
+
+    pub fn set_asci_dcd(&mut self, ch: usize, level: bool) {
+        if ch != 0 || self.asci_dcd[0] == level {
+            return;
+        }
+
+        let previous = self.asci_dcd[0];
+        self.asci_dcd[0] = level;
+        if !previous && level {
+            self.asci_dcd_latched = true;
+            self.asci_dcd_irq_pending = true;
+            if self.asci_dcd_auto_enabled() {
+                self.abort_asci_receive(0, true);
             }
         }
+        self.update_asci_interrupt_requests();
     }
 
     pub fn mmu_translate(&self, logical: u16) -> u32 {
@@ -1686,6 +1787,27 @@ impl<B: HostBus> Z180<B> {
         let spec = IO_REG_SPECS[index];
         let value = self.io_reg_peek(index as u8);
         match spec.read_effect {
+            ReadEffect::AsciCntlb => value,
+            ReadEffect::AsciStat => {
+                if index == STAT0 {
+                    self.asci_dcd_irq_pending = false;
+                    if !self.asci_dcd[0] && self.asci_dcd_latched {
+                        self.asci_dcd_latched = false;
+                    }
+                    self.update_asci_interrupt_requests();
+                }
+                value
+            }
+            ReadEffect::AsciRdr => {
+                let channel = index - RDR0;
+                let _ = self.asci_rx_fifo[channel].pop_front();
+                if let Some(next) = self.asci_rx_fifo[channel].front().copied() {
+                    self.io_regs[index] = next;
+                }
+                self.sync_asci_status(channel);
+                self.update_asci_interrupt_requests();
+                value
+            }
             ReadEffect::None => value,
             ReadEffect::Tcr => {
                 self.prt_clear_armed = (value >> 6) & 0x03;
@@ -1735,9 +1857,15 @@ impl<B: HostBus> Z180<B> {
         }
         let old = self.io_regs[index];
         self.io_regs[index] = match spec.write_effect {
-            WriteEffect::None | WriteEffect::Mmu | WriteEffect::Tcr => {
-                (old & !spec.write_mask) | (value & spec.write_mask)
-            }
+            WriteEffect::AsciAsext
+            | WriteEffect::AsciCntla
+            | WriteEffect::AsciCntlb
+            | WriteEffect::AsciStat
+            | WriteEffect::AsciTdr
+            | WriteEffect::Icr
+            | WriteEffect::None
+            | WriteEffect::Mmu
+            | WriteEffect::Tcr => (old & !spec.write_mask) | (value & spec.write_mask),
             WriteEffect::Tmdr => {
                 let channel = usize::from(index >= TMDR1L);
                 if self.io_regs[TCR] & (1_u8 << channel) == 0 {
@@ -1781,7 +1909,264 @@ impl<B: HostBus> Z180<B> {
             self.recompute_mmu_pages();
         } else if spec.write_effect == WriteEffect::Tcr {
             self.update_prt_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::AsciCntla {
+            self.apply_asci_cntla_write(index - CNTLA0, old);
+        } else if matches!(
+            spec.write_effect,
+            WriteEffect::AsciCntlb | WriteEffect::AsciStat
+        ) {
+            self.update_asci_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::AsciTdr {
+            let channel = index - TDR0;
+            self.asci_tdr_full[channel] = self.io_regs[ICR] & 0x20 == 0;
+            self.start_asci_transmit(channel);
+            self.sync_asci_status(channel);
+            self.update_asci_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::AsciAsext {
+            let channel = index - 0x12;
+            if channel == 0 && self.asci_dcd_auto_enabled() && self.asci_dcd_latched {
+                self.abort_asci_receive(0, true);
+            }
+            self.update_asci_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::Icr && self.io_regs[ICR] & 0x20 != 0 {
+            self.stop_asci_for_iostop();
         }
+    }
+
+    fn asci_cntlb_value(&self, index: usize) -> u8 {
+        let channel = index - CNTLB0;
+        let cts_visible = channel == 0 || self.io_regs[STAT1] & 0x04 != 0;
+        (self.io_regs[index] & !0x20)
+            | if cts_visible && self.asci_cts[channel] {
+                0x20
+            } else {
+                0
+            }
+    }
+
+    fn asci_status_value(&self, channel: usize) -> u8 {
+        let index = STAT0 + channel;
+        let mut value = self.io_regs[index] & !0x06;
+        if channel == 0 && self.asci_dcd_latched {
+            value |= 0x04;
+        } else if channel == 1 {
+            value |= self.io_regs[STAT1] & 0x04;
+        }
+        if !self.asci_tdr_full[channel] && !self.asci_cts_hides_tdre(channel) {
+            value |= 0x02;
+        }
+        value
+    }
+
+    fn asci_cts_hides_tdre(&self, channel: usize) -> bool {
+        if !self.asci_cts[channel] {
+            return false;
+        }
+        if channel == 0 {
+            self.variant != Variant::Z8S180 || self.io_regs[0x12] & 0x20 == 0
+        } else {
+            self.io_regs[STAT1] & 0x04 != 0
+        }
+    }
+
+    fn asci_dcd_auto_enabled(&self) -> bool {
+        self.variant != Variant::Z8S180 || self.io_regs[0x12] & 0x40 == 0
+    }
+
+    fn asci_receiver_enabled(&self, channel: usize) -> bool {
+        let enabled = self.io_regs[ICR] & 0x20 == 0 && self.io_regs[CNTLA0 + channel] & 0x40 != 0;
+        let dcd_inhibits = channel == 0 && self.asci_dcd_auto_enabled() && self.asci_dcd_latched;
+        enabled && !dcd_inhibits
+    }
+
+    fn asci_frame_cycles(&self, channel: usize) -> Option<u64> {
+        let cntla = self.io_regs[CNTLA0 + channel];
+        let cntlb = self.io_regs[CNTLB0 + channel];
+        let asext = if self.variant == Variant::Z8S180 {
+            self.io_regs[0x12 + channel]
+        } else {
+            0
+        };
+        let clock_mode = if asext & 0x10 != 0 {
+            1_u64
+        } else if cntlb & 0x08 == 0 {
+            16
+        } else {
+            64
+        };
+        let bit_cycles = if self.variant == Variant::Z8S180 && asext & 0x08 != 0 {
+            let (low, high) = if channel == 0 {
+                (ASTC0L, ASTC0H)
+            } else {
+                (ASTC1L, ASTC1H)
+            };
+            let time_constant =
+                u64::from(u16::from_le_bytes([self.io_regs[low], self.io_regs[high]]));
+            2 * (time_constant + 2) * clock_mode
+        } else {
+            let divisor = cntlb & 0x07;
+            if divisor == 0x07 {
+                return None;
+            }
+            let prescale = if cntlb & 0x20 == 0 { 10_u64 } else { 30 };
+            prescale * (1_u64 << divisor) * clock_mode
+        };
+
+        let data_bits = if cntla & 0x04 != 0 { 8_u64 } else { 7 };
+        let parity_or_mp = u64::from(cntla & 0x02 != 0 || cntlb & 0x40 != 0);
+        let stop_bits = if cntla & 0x01 != 0 { 2_u64 } else { 1 };
+        Some((1 + data_bits + parity_or_mp + stop_bits) * bit_cycles)
+    }
+
+    fn sync_asci_status(&mut self, channel: usize) {
+        let index = STAT0 + channel;
+        if self.asci_rx_fifo[channel].is_empty() {
+            self.io_regs[index] &= !0x80;
+        } else {
+            self.io_regs[index] |= 0x80;
+        }
+        if self.asci_tdr_full[channel] {
+            self.io_regs[index] &= !0x02;
+        } else {
+            self.io_regs[index] |= 0x02;
+        }
+    }
+
+    fn update_asci_interrupt_requests(&mut self) {
+        self.internal_irq_pending &= !0x60;
+        for channel in 0..2 {
+            let status = self.io_regs[STAT0 + channel];
+            let mut receive_cause = status & 0x70 != 0;
+            let rdrf_interrupt_enabled =
+                self.variant != Variant::Z8S180 || self.io_regs[0x12 + channel] & 0x80 != 0;
+            receive_cause |= status & 0x80 != 0 && rdrf_interrupt_enabled;
+            if channel == 0 {
+                receive_cause |= self.asci_dcd_irq_pending;
+            }
+            let receive_request = status & 0x08 != 0 && receive_cause;
+            let transmit_request =
+                status & 0x01 != 0 && self.asci_status_value(channel) & 0x02 != 0;
+            if receive_request || transmit_request {
+                self.internal_irq_pending |= 0x20_u8 << channel;
+            }
+        }
+    }
+
+    fn abort_asci_receive(&mut self, channel: usize, clear_status: bool) {
+        self.asci_rx_shift[channel] = None;
+        self.asci_rx_cycles[channel] = 0;
+        self.asci_rx_clocked[channel] = false;
+        if clear_status {
+            self.asci_rx_fifo[channel].clear();
+            self.io_regs[STAT0 + channel] &= !0xf0;
+        }
+        self.sync_asci_status(channel);
+    }
+
+    fn start_asci_transmit(&mut self, channel: usize) {
+        if self.asci_tx_shift[channel].is_some()
+            || !self.asci_tdr_full[channel]
+            || self.io_regs[ICR] & 0x20 != 0
+            || self.io_regs[CNTLA0 + channel] & 0x20 == 0
+        {
+            return;
+        }
+
+        self.asci_tx_shift[channel] = Some(self.io_regs[TDR0 + channel]);
+        self.asci_tdr_full[channel] = false;
+        if let Some(cycles) = self.asci_frame_cycles(channel) {
+            self.asci_tx_cycles[channel] = cycles;
+            self.asci_tx_clocked[channel] = true;
+        } else {
+            self.asci_tx_cycles[channel] = 0;
+            self.asci_tx_clocked[channel] = false;
+        }
+    }
+
+    fn apply_asci_cntla_write(&mut self, channel: usize, old: u8) {
+        if self.io_regs[ICR] & 0x20 != 0 {
+            self.io_regs[CNTLA0 + channel] &= !0x60;
+        }
+        let next = self.io_regs[CNTLA0 + channel];
+        if next & 0x08 == 0 {
+            self.io_regs[STAT0 + channel] &= !0x70;
+        }
+        if old & 0x40 != 0 && next & 0x40 == 0 {
+            self.abort_asci_receive(channel, false);
+        }
+        if old & 0x20 != 0 && next & 0x20 == 0 {
+            self.asci_tx_shift[channel] = None;
+            self.asci_tx_cycles[channel] = 0;
+            self.asci_tx_clocked[channel] = false;
+        }
+        self.start_asci_transmit(channel);
+        self.sync_asci_status(channel);
+        self.update_asci_interrupt_requests();
+    }
+
+    fn stop_asci_for_iostop(&mut self) {
+        for channel in 0..2 {
+            self.io_regs[CNTLA0 + channel] &= !0x60;
+            self.asci_tdr_full[channel] = false;
+            self.asci_tx_shift[channel] = None;
+            self.asci_tx_cycles[channel] = 0;
+            self.asci_tx_clocked[channel] = false;
+            self.abort_asci_receive(channel, true);
+            self.sync_asci_status(channel);
+        }
+        self.update_asci_interrupt_requests();
+    }
+
+    fn advance_asci(&mut self, cycles: u32) {
+        if self.io_regs[ICR] & 0x20 != 0 {
+            self.update_asci_interrupt_requests();
+            return;
+        }
+        for channel in 0..2 {
+            let mut remaining_cycles = u64::from(cycles);
+            while self.asci_tx_shift[channel].is_some() && self.asci_tx_clocked[channel] {
+                if self.asci_tx_cycles[channel] > remaining_cycles {
+                    self.asci_tx_cycles[channel] -= remaining_cycles;
+                    break;
+                }
+                remaining_cycles -= self.asci_tx_cycles[channel];
+                let byte = self.asci_tx_shift[channel]
+                    .take()
+                    .expect("ASCI transmit shift register was checked as full");
+                self.asci_tx_output[channel].push_back(byte);
+                self.asci_tx_cycles[channel] = 0;
+                self.asci_tx_clocked[channel] = false;
+                self.start_asci_transmit(channel);
+            }
+
+            if self.asci_rx_shift[channel].is_some() && self.asci_rx_clocked[channel] {
+                if self.asci_rx_cycles[channel] > u64::from(cycles) {
+                    self.asci_rx_cycles[channel] -= u64::from(cycles);
+                } else {
+                    let byte = self.asci_rx_shift[channel]
+                        .take()
+                        .expect("ASCI receive shift register was checked as full");
+                    self.asci_rx_cycles[channel] = 0;
+                    self.asci_rx_clocked[channel] = false;
+                    let fifo_capacity = if self.variant == Variant::Z8S180 {
+                        4
+                    } else {
+                        1
+                    };
+                    if self.asci_rx_fifo[channel].len() == fifo_capacity {
+                        self.io_regs[STAT0 + channel] |= 0x40;
+                    } else {
+                        let was_empty = self.asci_rx_fifo[channel].is_empty();
+                        self.asci_rx_fifo[channel].push_back(byte);
+                        if was_empty {
+                            self.io_regs[RDR0 + channel] = byte;
+                        }
+                    }
+                }
+            }
+            self.sync_asci_status(channel);
+        }
+        self.update_asci_interrupt_requests();
     }
 
     fn recompute_mmu_pages(&mut self) {
@@ -1860,6 +2245,7 @@ impl<B: HostBus> Z180<B> {
         self.frc_cycle_remainder = frc_cycles % 10;
         self.io_regs[FRC] = self.io_regs[FRC].wrapping_sub(frc_ticks as u8);
         self.advance_prt(cycles);
+        self.advance_asci(cycles);
         self.cycle_count = self.cycle_count.saturating_add(u64::from(cycles));
         cycles
     }
@@ -2319,6 +2705,305 @@ mod tests {
         assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff);
         cpu.finish_step(9);
         assert_eq!(cpu.io_reg_peek(FRC as u8), 0xfe);
+    }
+
+    #[test]
+    fn asci_standard_divisors_and_frame_formats_use_hand_computed_cycle_counts() {
+        let mut cpu = machine();
+
+        cpu.write_internal_io(CNTLA0, 0x44); // RE, 8 data, no parity, 1 stop.
+        cpu.write_internal_io(CNTLB0, 0x00); // /10, /16, SS=0: 160 phi/bit.
+        assert!(cpu.asci_rx_push(0, 0xa5));
+        cpu.finish_step(1_599); // (1 start + 8 data + 1 stop) * 160 - 1.
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
+        cpu.finish_step(1);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0x80);
+        assert_eq!(cpu.read_internal_io(RDR0), 0xa5);
+
+        cpu.write_internal_io(CNTLA0, 0x47); // RE, 8 data, parity, 2 stop.
+        cpu.write_internal_io(CNTLB0, 0x22); // /30, /16, SS=2: 1920 phi/bit.
+        assert!(cpu.asci_rx_push(0, 0x5a));
+        cpu.finish_step(23_039); // (1 + 8 + 1 + 2) * 1920 - 1.
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
+        cpu.finish_step(1);
+        assert_eq!(cpu.read_internal_io(RDR0), 0x5a);
+
+        cpu.write_internal_io(CNTLA0, 0x40); // RE, 7 data, no parity, 1 stop.
+        cpu.write_internal_io(CNTLB0, 0x09); // /10, /64, SS=1: 1280 phi/bit.
+        assert!(cpu.asci_rx_push(0, 0x33));
+        cpu.finish_step(11_519); // (1 + 7 + 1) * 1280 - 1.
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
+        cpu.finish_step(1);
+        assert_eq!(cpu.read_internal_io(RDR0), 0x33);
+    }
+
+    #[test]
+    fn asci_tdr_tsr_double_buffering_and_tdre_follow_transmit_progress() {
+        let mut cpu = machine();
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x24); // TE, 8N1.
+
+        cpu.write_internal_io(TDR0, 0x11);
+        assert_eq!(
+            cpu.io_reg_peek(STAT0 as u8) & 0x02,
+            0x02,
+            "TDR moved to TSR"
+        );
+        cpu.write_internal_io(TDR0, 0x22);
+        assert_eq!(
+            cpu.io_reg_peek(STAT0 as u8) & 0x02,
+            0x00,
+            "second byte fills TDR"
+        );
+
+        cpu.finish_step(1_599);
+        assert_eq!(cpu.asci_tx_pop(0), None);
+        cpu.finish_step(1);
+        assert_eq!(cpu.asci_tx_pop(0), Some(0x11));
+        assert_eq!(
+            cpu.io_reg_peek(STAT0 as u8) & 0x02,
+            0x02,
+            "second byte moved to TSR"
+        );
+
+        cpu.finish_step(1_600);
+        assert_eq!(cpu.asci_tx_pop(0), Some(0x22));
+        assert_eq!(cpu.asci_tx_pop(0), None);
+    }
+
+    #[test]
+    fn asci_rdr_rsr_double_buffering_sets_overrun_without_replacing_rdr() {
+        let mut cpu = machine();
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x44);
+
+        assert!(cpu.asci_rx_push(0, 0x11));
+        cpu.finish_step(1_600);
+        assert!(
+            cpu.asci_rx_push(0, 0x22),
+            "RSR remains available while RDR is full"
+        );
+        cpu.finish_step(1_600);
+
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0xc0, 0xc0);
+        assert_eq!(
+            cpu.read_internal_io(RDR0),
+            0x11,
+            "overrun preserves the prior RDR byte"
+        );
+        assert_eq!(
+            cpu.io_reg_peek(STAT0 as u8) & 0xc0,
+            0x40,
+            "RDR read leaves OVRN set"
+        );
+        cpu.write_internal_io(CNTLA0, 0x44); // EFR=0 clears OVRN/PE/FE.
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x70, 0);
+    }
+
+    #[test]
+    fn s180_asci_fifo_and_astc_brg_have_the_documented_depth_and_timing() {
+        let mut cpu = recording_machine(Variant::Z8S180);
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x44);
+
+        for byte in 0_u8..4 {
+            assert!(cpu.asci_rx_push(0, byte));
+            cpu.finish_step(1_600);
+        }
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0xc0, 0x80);
+        assert!(cpu.asci_rx_push(0, 4));
+        cpu.finish_step(1_600);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0xc0, 0xc0);
+        for byte in 0_u8..4 {
+            assert_eq!(cpu.read_internal_io(RDR0), byte);
+        }
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
+
+        cpu.write_internal_io(0x12, 0x18); // X1 bit clock + 16-bit BRG.
+        cpu.write_internal_io(ASTC0L, 0x03);
+        cpu.write_internal_io(ASTC0H, 0x00);
+        assert!(cpu.asci_rx_push(0, 0x55));
+        cpu.finish_step(99); // 8N1 * [2 * (3 + 2) * 1] - 1.
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
+        cpu.finish_step(1);
+        assert_eq!(cpu.read_internal_io(RDR0), 0x55);
+    }
+
+    #[test]
+    fn asci_rie_tie_and_s180_rdrf_inhibit_qualify_internal_requests() {
+        let mut cpu = machine();
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x44);
+        cpu.write_internal_io(STAT0, 0x08);
+        assert!(cpu.asci_rx_push(0, 0xa5));
+        cpu.finish_step(1_599);
+        assert_eq!(cpu.internal_irq_pending & 0x20, 0);
+        cpu.finish_step(1);
+        assert_eq!(cpu.internal_irq_pending & 0x20, 0x20);
+        assert_eq!(cpu.read_internal_io(RDR0), 0xa5);
+        assert_eq!(cpu.internal_irq_pending & 0x20, 0);
+
+        cpu.write_internal_io(STAT0, 0x01);
+        assert_eq!(
+            cpu.internal_irq_pending & 0x20,
+            0x20,
+            "TIE with TDRE requests"
+        );
+        cpu.write_internal_io(TDR0, 0x5a);
+        assert_eq!(
+            cpu.internal_irq_pending & 0x20,
+            0,
+            "TE is off, so TDR remains full"
+        );
+
+        let mut s180 = recording_machine(Variant::Z8S180);
+        s180.write_internal_io(CNTLB0, 0x00);
+        s180.write_internal_io(CNTLA0, 0x44);
+        s180.write_internal_io(STAT0, 0x08);
+        assert!(s180.asci_rx_push(0, 0x33));
+        s180.finish_step(1_600);
+        assert_eq!(
+            s180.internal_irq_pending & 0x20,
+            0,
+            "reset ASEXT inhibits RDRF IRQ"
+        );
+        s180.write_internal_io(0x12, 0x80);
+        assert_eq!(
+            s180.internal_irq_pending & 0x20,
+            0x20,
+            "ASEXT bit 7 removes inhibit"
+        );
+    }
+
+    #[test]
+    fn both_asci_channels_deliver_their_internal_vectors_from_halt() {
+        for (channel, pending, vector) in [(0_usize, 0x20_u8, 0x20ae_u32), (1, 0x40, 0x20b0)] {
+            let mut cpu = machine();
+            cpu.write_internal_io(DCNTL, 0x00);
+            cpu.write_internal_io(IL, 0xa0);
+            cpu.mem_poke(0, 0x76);
+            cpu.mem_poke(vector, 0x56);
+            cpu.mem_poke(vector + 1, 0x34);
+            cpu.set_reg(Reg::IR, 0x2000);
+            cpu.set_reg(Reg::SP, 0x8000);
+            cpu.set_iff1(true);
+
+            assert_eq!(cpu.step(), 3, "channel {channel} executes HALT");
+            assert!(cpu.halted());
+            cpu.write_internal_io(STAT0 + channel, 0x01);
+            assert_eq!(cpu.internal_irq_pending & pending, pending);
+            assert_eq!(cpu.step(), 18, "channel {channel} acknowledges ASCI IRQ");
+            assert_eq!(cpu.reg(Reg::PC), 0x3456);
+            assert_eq!(cpu.reg(Reg::SP), 0x7ffe);
+        }
+    }
+
+    #[test]
+    fn asci_cts_suppresses_only_the_documented_tdre_surfaces() {
+        let mut cpu = machine();
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x02, 0x02);
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x24);
+        cpu.write_internal_io(TDR0, 0xa5);
+        cpu.set_asci_cts(0, true);
+        assert_eq!(cpu.io_reg_peek(CNTLB0 as u8) & 0x20, 0x20);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x02, 0);
+        cpu.finish_step(1_600);
+        assert_eq!(cpu.asci_tx_pop(0), Some(0xa5), "CTS does not stop TSR");
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x02, 0);
+        cpu.set_asci_cts(0, false);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x02, 0x02);
+
+        cpu.set_asci_cts(1, true);
+        assert_eq!(cpu.io_reg_peek(STAT1 as u8) & 0x02, 0x02, "CTS1E is clear");
+        cpu.write_internal_io(STAT1, 0x04);
+        assert_eq!(cpu.io_reg_peek(CNTLB0 as u8 + 1) & 0x20, 0x20);
+        assert_eq!(
+            cpu.io_reg_peek(STAT1 as u8) & 0x02,
+            0,
+            "CTS1E enables gating"
+        );
+
+        let mut s180 = recording_machine(Variant::Z8S180);
+        s180.set_asci_cts(0, true);
+        assert_eq!(s180.io_reg_peek(STAT0 as u8) & 0x02, 0);
+        s180.write_internal_io(0x12, 0x20);
+        assert_eq!(
+            s180.io_reg_peek(STAT0 as u8) & 0x02,
+            0x02,
+            "ASEXT CTS0 disable makes the pin advisory"
+        );
+    }
+
+    #[test]
+    fn asci_dcd_transition_latch_gates_receive_and_requests_until_stat0_read() {
+        let mut cpu = machine();
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x44);
+        cpu.write_internal_io(STAT0, 0x08);
+        assert!(cpu.asci_rx_push(0, 0x11));
+
+        cpu.set_asci_dcd(0, true);
+        assert_eq!(cpu.internal_irq_pending & 0x20, 0x20);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0xf4, 0x04);
+        assert!(!cpu.asci_rx_push(0, 0x22));
+        cpu.set_asci_dcd(0, false);
+        assert!(!cpu.asci_rx_push(0, 0x33), "latched DCD remains inhibiting");
+
+        assert_eq!(
+            cpu.read_internal_io(STAT0) & 0x04,
+            0x04,
+            "first read reports prior high"
+        );
+        assert_eq!(cpu.internal_irq_pending & 0x20, 0);
+        assert_eq!(
+            cpu.read_internal_io(STAT0) & 0x04,
+            0,
+            "second read reports low"
+        );
+        assert!(cpu.asci_rx_push(0, 0x44));
+
+        let mut s180 = recording_machine(Variant::Z8S180);
+        s180.write_internal_io(CNTLB0, 0x00);
+        s180.write_internal_io(CNTLA0, 0x44);
+        s180.write_internal_io(0x12, 0x40);
+        s180.set_asci_dcd(0, true);
+        assert!(
+            s180.asci_rx_push(0, 0x55),
+            "ASEXT DCD disable makes the pin advisory"
+        );
+        s180.finish_step(1_600);
+        assert_eq!(s180.read_internal_io(RDR0), 0x55);
+    }
+
+    #[test]
+    fn asci_reset_and_iostop_preserve_data_registers_while_stopping_operations() {
+        let mut cpu = machine();
+        cpu.write_internal_io(TDR0, 0xa5);
+        cpu.write_internal_io(RDR0, 0x5a);
+        cpu.reset();
+        assert_eq!(cpu.io_reg_peek(TDR0 as u8), 0xa5);
+        assert_eq!(cpu.io_reg_peek(RDR0 as u8), 0x5a);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8), 0x02);
+
+        cpu.write_internal_io(CNTLB0, 0x00);
+        cpu.write_internal_io(CNTLA0, 0x64);
+        cpu.write_internal_io(TDR0, 0x11);
+        assert!(cpu.asci_rx_push(0, 0x22));
+        cpu.io_regs[STAT0] |= 0x70;
+        cpu.write_internal_io(ICR, 0x20);
+        assert_eq!(cpu.io_reg_peek(CNTLA0 as u8) & 0x60, 0);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0xf2, 0x02);
+        cpu.write_internal_io(CNTLA0, 0x64);
+        cpu.write_internal_io(TDR0, 0x33);
+        assert_eq!(cpu.io_reg_peek(CNTLA0 as u8) & 0x60, 0);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x02, 0x02);
+        assert!(!cpu.asci_rx_push(0, 0x44));
+        cpu.finish_step(3_200);
+        assert_eq!(cpu.asci_tx_pop(0), None);
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
+        assert_eq!(cpu.io_reg_peek(TDR0 as u8), 0x33);
+        assert_eq!(cpu.io_reg_peek(RDR0 as u8), 0x5a);
     }
 
     #[test]

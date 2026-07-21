@@ -1797,6 +1797,62 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 The formatting check completed with no output. P6.2 is complete; P6.3
 ASCI0/ASCI1 is the next unchecked Phase 6 task. Gate G6 remains open.
 
+### P6.3 — ASCI0/ASCI1 (2026-07-21)
+
+Both asynchronous channels now model the documented TDR/TSR and RSR/RDR
+stages at byte granularity. Host receive bytes become visible only after a
+complete configured frame; baseline channels retain one completed byte while
+Z8S180 channels expose the four-byte receive FIFO. Guest transmit bytes move
+through TDR and the inaccessible shift stage, and become host-visible through
+`asci_tx_pop` only after a complete frame.
+
+Frame timing covers 7/8 data bits, optional parity or multiprocessor bit, one
+or two stop bits, the `/10` or `/30` prescaler, `/16` or `/64` sampling, and
+the standard `2^SS` divisors. Z8S180 X1 bit-clock and 16-bit ASTC BRG modes
+use their separate documented equation. The fixed host APIs are now present:
+`asci_rx_push`, `asci_tx_pop`, `set_asci_cts`, and `set_asci_dcd`.
+
+STAT now implements RDRF, OVRN/error clearing, TDRE/TIE/RIE qualification,
+RDR read side effects, the DCD0 transition latch, CTS0/CTS1 gating, and the
+Z8S180 modem-advisory and RDRF-interrupt-inhibit controls. CTS suppresses
+observable TDRE without stopping an active TSR. RESET and I/O STOP stop both
+channels and reset their status/control state while preserving TDR/RDR data;
+I/O STOP continues to hold ASCI stopped until the mode is cleared.
+
+The first focused run passed eight tests and failed only the vector test. That
+test enabled TIE before trying to execute HALT, so the CPU correctly serviced
+the request at the pre-instruction checkpoint. The test was corrected to enter
+HALT first and assert the request afterward; no production behavior changed.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core asci_ -- --nocapture
+running 9 tests
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+running 59 tests
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.92s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.3 is complete; P6.4 CSI/O
+is the next unchecked Phase 6 task. Gate G6 remains open.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential
