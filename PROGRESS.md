@@ -649,6 +649,42 @@ Doc-tests z180_core: 0 passed; 0 failed
 The format check completed successfully with no output. Gate G2 remains the
 next unchecked plan item.
 
+### Gate G2 — PASS (2026-07-20)
+
+P2.3 commit `d51187b` was pushed before the gate. GitHub Actions run
+`29805137326` passed Ubuntu in 40 seconds and Windows in 1 minute 12 seconds,
+including checkout with submodules, rustfmt, warnings-denied Clippy, and all
+workspace tests.
+
+Exact full SST gate output:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1
+SUMMARY pass=252000 fail=0 unimplemented=453000 excluded=899
+```
+
+| Surface | Files/cases | Result |
+|---|---:|---|
+| Documented unprefixed page | 252 files / 252,000 cases | 100% PASS |
+| Documented CB/DD/ED/FD-prefixed pages | 453 files / 453,000 cases | UNIMPLEMENTED for Phase 3 |
+| UM-defined undefined prefixed forms | 899 files | EXCLUDED by Appendix A policy |
+| Failures | 0 cases | PASS |
+
+The only unimplemented reports are prefixed-page stems (`cb`, `dd`, `ed`, or
+`fd`); all 252 documented single-byte files report 1,000 passes each.
+
+The required negative control still detects reversed LD operands and exits
+nonzero:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 40..7f --sabotage-ld
+SUMMARY pass=8201 fail=55799 unimplemented=0 excluded=0
+Error: 55799 single-step test(s) failed
+error: process didn't exit successfully (exit code: 1)
+```
+
+Phase 2 is complete. Phase 3 task 1 is the next unchecked plan item.
+
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
 
 ## Phase 4 — Timing and ZEXDOC
