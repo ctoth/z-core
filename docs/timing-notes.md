@@ -106,6 +106,22 @@ edge input, so such a byte may occupy the hardware shift stage but system-phi
 progress cannot complete it. No external frequency is inferred and no
 substitute clock API is introduced.
 
+### Clocked serial port
+
+CSI/O uses one unbuffered 8-bit shift operation in either transmit or receive
+mode. For internal clock selections SS=0 through 6, one bit consumes
+`20 << SS` phi cycles and the byte completes after `160 << SS` cycles. The
+seven pinned byte totals are therefore 160, 320, 640, 1280, 2560, 5120, and
+10240 phi cycles. Completion, TE/RE clearing, EF setting, and queue/TRD
+visibility occur together at the common `finish_step` boundary.
+
+The divider is captured when TE starts transmission or when the host supplies
+a byte to an enabled receiver. Later speed writes do not retime that active
+byte; the UM requires software to disable both directions before changing
+baud rate. SS=7 selects an external CKS input. The fixed Phase 1 API has no
+CKS edge input, so an external-clock transfer remains in its shift stage and
+does not advance from system phi cycles. No external clock is inferred.
+
 ## Intentional approximations
 
 ### Bus phases

@@ -14,9 +14,9 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use ioregs::{
-    ASTC0H, ASTC0L, ASTC1H, ASTC1L, BBR, CBAR, CBR, CNTLA0, CNTLB0, DCNTL, FRC, ICR, IL,
+    ASTC0H, ASTC0L, ASTC1H, ASTC1L, BBR, CBAR, CBR, CNTLA0, CNTLB0, CNTR, DCNTL, FRC, ICR, IL,
     IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RDR0, RDR1, RLDR0H, RLDR0L, RLDR1H, RLDR1L, ReadEffect,
-    STAT0, STAT1, TCR, TDR0, TDR1, TMDR0H, TMDR0L, TMDR1H, TMDR1L, WriteEffect,
+    STAT0, STAT1, TCR, TDR0, TDR1, TMDR0H, TMDR0L, TMDR1H, TMDR1L, TRD, WriteEffect,
 };
 use memory::Memory;
 use optable::{
@@ -116,6 +116,10 @@ pub struct Z180<B: HostBus> {
     asci_rx_cycles: [u64; 2],
     asci_rx_clocked: [bool; 2],
     asci_rx_fifo: [VecDeque<u8>; 2],
+    csio_rx_shift: Option<u8>,
+    csio_cycles: u64,
+    csio_clocked: bool,
+    csio_tx_output: VecDeque<u8>,
     events: Vec<Event>,
 }
 
@@ -168,6 +172,10 @@ impl<B: HostBus> Z180<B> {
             asci_rx_cycles: [0; 2],
             asci_rx_clocked: [false; 2],
             asci_rx_fifo: core::array::from_fn(|_| VecDeque::new()),
+            csio_rx_shift: None,
+            csio_cycles: 0,
+            csio_clocked: false,
+            csio_tx_output: VecDeque::new(),
             events: Vec::new(),
         };
         cpu.recompute_mmu_pages();
@@ -182,6 +190,7 @@ impl<B: HostBus> Z180<B> {
             self.io_regs[TDR1],
             self.io_regs[RDR0],
             self.io_regs[RDR1],
+            self.io_regs[TRD],
         ];
         for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
             self.io_regs[index] = if spec.is_available(self.variant) {
@@ -194,6 +203,7 @@ impl<B: HostBus> Z180<B> {
         self.io_regs[TDR1] = asci_data[1];
         self.io_regs[RDR0] = asci_data[2];
         self.io_regs[RDR1] = asci_data[3];
+        self.io_regs[TRD] = asci_data[4];
         self.recompute_mmu_pages();
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
@@ -229,6 +239,10 @@ impl<B: HostBus> Z180<B> {
             self.asci_tx_output[channel].clear();
             self.asci_rx_fifo[channel].clear();
         }
+        self.csio_rx_shift = None;
+        self.csio_cycles = 0;
+        self.csio_clocked = false;
+        self.csio_tx_output.clear();
         self.events.clear();
     }
 
@@ -383,6 +397,7 @@ impl<B: HostBus> Z180<B> {
             ReadEffect::AsciCntlb => self.asci_cntlb_value(index),
             ReadEffect::AsciStat => self.asci_status_value(index - STAT0),
             ReadEffect::AsciRdr
+            | ReadEffect::CsioTrd
             | ReadEffect::None
             | ReadEffect::Tcr
             | ReadEffect::TmdrHigh
@@ -408,6 +423,30 @@ impl<B: HostBus> Z180<B> {
 
     pub fn asci_tx_pop(&mut self, ch: usize) -> Option<u8> {
         self.asci_tx_output.get_mut(ch)?.pop_front()
+    }
+
+    pub fn csio_rx_push(&mut self, byte: u8) -> bool {
+        if self.io_regs[ICR] & 0x20 != 0
+            || self.io_regs[CNTR] & 0x20 == 0
+            || self.io_regs[STAT1] & 0x04 != 0
+            || self.csio_rx_shift.is_some()
+        {
+            return false;
+        }
+
+        self.csio_rx_shift = Some(byte);
+        if let Some(cycles) = self.csio_transfer_cycles() {
+            self.csio_cycles = cycles;
+            self.csio_clocked = true;
+        } else {
+            self.csio_cycles = 0;
+            self.csio_clocked = false;
+        }
+        true
+    }
+
+    pub fn csio_tx_pop(&mut self) -> Option<u8> {
+        self.csio_tx_output.pop_front()
     }
 
     pub fn set_asci_cts(&mut self, ch: usize, level: bool) {
@@ -1808,6 +1847,11 @@ impl<B: HostBus> Z180<B> {
                 self.update_asci_interrupt_requests();
                 value
             }
+            ReadEffect::CsioTrd => {
+                self.io_regs[CNTR] &= !0x80;
+                self.update_csio_interrupt_request();
+                value
+            }
             ReadEffect::None => value,
             ReadEffect::Tcr => {
                 self.prt_clear_armed = (value >> 6) & 0x03;
@@ -1862,6 +1906,8 @@ impl<B: HostBus> Z180<B> {
             | WriteEffect::AsciCntlb
             | WriteEffect::AsciStat
             | WriteEffect::AsciTdr
+            | WriteEffect::CsioCntr
+            | WriteEffect::CsioTrd
             | WriteEffect::Icr
             | WriteEffect::None
             | WriteEffect::Mmu
@@ -1911,10 +1957,12 @@ impl<B: HostBus> Z180<B> {
             self.update_prt_interrupt_requests();
         } else if spec.write_effect == WriteEffect::AsciCntla {
             self.apply_asci_cntla_write(index - CNTLA0, old);
-        } else if matches!(
-            spec.write_effect,
-            WriteEffect::AsciCntlb | WriteEffect::AsciStat
-        ) {
+        } else if spec.write_effect == WriteEffect::AsciCntlb {
+            self.update_asci_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::AsciStat {
+            if index == STAT1 && self.io_regs[STAT1] & 0x04 != 0 {
+                self.abort_csio_receive();
+            }
             self.update_asci_interrupt_requests();
         } else if spec.write_effect == WriteEffect::AsciTdr {
             let channel = index - TDR0;
@@ -1928,8 +1976,14 @@ impl<B: HostBus> Z180<B> {
                 self.abort_asci_receive(0, true);
             }
             self.update_asci_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::CsioCntr {
+            self.apply_csio_cntr_write(old);
+        } else if spec.write_effect == WriteEffect::CsioTrd {
+            self.io_regs[CNTR] &= !0x80;
+            self.update_csio_interrupt_request();
         } else if spec.write_effect == WriteEffect::Icr && self.io_regs[ICR] & 0x20 != 0 {
             self.stop_asci_for_iostop();
+            self.stop_csio_for_iostop();
         }
     }
 
@@ -2117,6 +2171,100 @@ impl<B: HostBus> Z180<B> {
         self.update_asci_interrupt_requests();
     }
 
+    fn csio_transfer_cycles(&self) -> Option<u64> {
+        let speed = self.io_regs[CNTR] & 0x07;
+        if speed == 0x07 {
+            None
+        } else {
+            Some(8 * (20_u64 << speed))
+        }
+    }
+
+    fn update_csio_interrupt_request(&mut self) {
+        self.internal_irq_pending &= !0x10;
+        if self.io_regs[CNTR] & 0xc0 == 0xc0 {
+            self.internal_irq_pending |= 0x10;
+        }
+    }
+
+    fn abort_csio_receive(&mut self) {
+        self.io_regs[CNTR] &= !0x20;
+        self.csio_rx_shift = None;
+        self.csio_cycles = 0;
+        self.csio_clocked = false;
+    }
+
+    fn apply_csio_cntr_write(&mut self, old: u8) {
+        if self.io_regs[ICR] & 0x20 != 0 {
+            self.io_regs[CNTR] &= !0xb0;
+        }
+        if self.io_regs[CNTR] & 0x30 == 0x30 {
+            self.io_regs[CNTR] &= !0x30;
+        }
+        if self.io_regs[STAT1] & 0x04 != 0 {
+            self.io_regs[CNTR] &= !0x20;
+        }
+        let next = self.io_regs[CNTR];
+
+        if old & 0x20 != 0 && next & 0x20 == 0 {
+            self.abort_csio_receive();
+        }
+        if old & 0x10 != 0 && next & 0x10 == 0 {
+            self.csio_cycles = 0;
+            self.csio_clocked = false;
+        }
+        if next & 0x20 != 0 && old & 0x20 == 0 {
+            self.csio_cycles = 0;
+            self.csio_clocked = false;
+            self.csio_rx_shift = None;
+        }
+        if next & 0x10 != 0 && old & 0x10 == 0 {
+            self.csio_rx_shift = None;
+            if let Some(cycles) = self.csio_transfer_cycles() {
+                self.csio_cycles = cycles;
+                self.csio_clocked = true;
+            } else {
+                self.csio_cycles = 0;
+                self.csio_clocked = false;
+            }
+        }
+        self.update_csio_interrupt_request();
+    }
+
+    fn stop_csio_for_iostop(&mut self) {
+        self.io_regs[CNTR] &= !0xb0;
+        self.csio_rx_shift = None;
+        self.csio_cycles = 0;
+        self.csio_clocked = false;
+        self.update_csio_interrupt_request();
+    }
+
+    fn advance_csio(&mut self, cycles: u32) {
+        if self.io_regs[ICR] & 0x20 != 0 || !self.csio_clocked {
+            return;
+        }
+        if self.csio_cycles > u64::from(cycles) {
+            self.csio_cycles -= u64::from(cycles);
+            return;
+        }
+
+        self.csio_cycles = 0;
+        self.csio_clocked = false;
+        if self.io_regs[CNTR] & 0x10 != 0 {
+            self.csio_tx_output.push_back(self.io_regs[TRD]);
+            self.io_regs[CNTR] &= !0x10;
+            self.io_regs[CNTR] |= 0x80;
+        } else if self.io_regs[CNTR] & 0x20 != 0 {
+            let Some(byte) = self.csio_rx_shift.take() else {
+                return;
+            };
+            self.io_regs[TRD] = byte;
+            self.io_regs[CNTR] &= !0x20;
+            self.io_regs[CNTR] |= 0x80;
+        }
+        self.update_csio_interrupt_request();
+    }
+
     fn advance_asci(&mut self, cycles: u32) {
         if self.io_regs[ICR] & 0x20 != 0 {
             self.update_asci_interrupt_requests();
@@ -2246,6 +2394,7 @@ impl<B: HostBus> Z180<B> {
         self.io_regs[FRC] = self.io_regs[FRC].wrapping_sub(frc_ticks as u8);
         self.advance_prt(cycles);
         self.advance_asci(cycles);
+        self.advance_csio(cycles);
         self.cycle_count = self.cycle_count.saturating_add(u64::from(cycles));
         cycles
     }
@@ -3004,6 +3153,133 @@ mod tests {
         assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
         assert_eq!(cpu.io_reg_peek(TDR0 as u8), 0x33);
         assert_eq!(cpu.io_reg_peek(RDR0 as u8), 0x5a);
+    }
+
+    #[test]
+    fn csio_internal_speed_selects_match_table_22_byte_timings() {
+        let mut cpu = machine();
+        for speed in 0_u8..=6 {
+            let expected = 160_u32 << speed;
+            cpu.write_internal_io(TRD, 0x80 | speed);
+            cpu.write_internal_io(CNTR, 0x10 | speed);
+
+            cpu.finish_step(expected - 1);
+            assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0x90, 0x10, "SS={speed}");
+            assert_eq!(cpu.csio_tx_pop(), None, "SS={speed} before completion");
+            cpu.finish_step(1);
+            assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0x90, 0x80, "SS={speed}");
+            assert_eq!(cpu.csio_tx_pop(), Some(0x80 | speed), "SS={speed} byte");
+        }
+    }
+
+    #[test]
+    fn csio_receive_is_half_duplex_unbuffered_and_clears_ef_on_trd_access() {
+        let mut cpu = machine();
+        cpu.write_internal_io(CNTR, 0x20);
+        assert!(cpu.csio_rx_push(0xa5));
+        assert!(!cpu.csio_rx_push(0x5a), "one RXS shift operation at a time");
+        cpu.finish_step(159);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0xa0, 0x20);
+        cpu.finish_step(1);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0xa0, 0x80);
+        assert_eq!(cpu.read_internal_io(TRD), 0xa5);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0x80, 0);
+
+        cpu.write_internal_io(CNTR, 0x30);
+        assert_eq!(
+            cpu.io_reg_peek(CNTR as u8) & 0x30,
+            0,
+            "invalid duplex request stops"
+        );
+
+        cpu.write_internal_io(STAT1, 0x04);
+        cpu.write_internal_io(CNTR, 0x20);
+        assert_eq!(
+            cpu.io_reg_peek(CNTR as u8) & 0x20,
+            0,
+            "CTS1E owns the RXS pin"
+        );
+        assert!(!cpu.csio_rx_push(0x33));
+    }
+
+    #[test]
+    fn csio_is_unbuffered_and_software_clears_abort_active_operations() {
+        let mut cpu = machine();
+        cpu.write_internal_io(TRD, 0x11);
+        cpu.write_internal_io(CNTR, 0x10);
+        cpu.finish_step(80);
+        cpu.write_internal_io(TRD, 0x22);
+        cpu.finish_step(80);
+        assert_eq!(
+            cpu.csio_tx_pop(),
+            Some(0x22),
+            "TRD write updates active shift data"
+        );
+
+        cpu.write_internal_io(TRD, 0x33);
+        cpu.write_internal_io(CNTR, 0x10);
+        cpu.finish_step(80);
+        cpu.write_internal_io(CNTR, 0x00);
+        cpu.finish_step(160);
+        assert_eq!(cpu.csio_tx_pop(), None);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0x90, 0);
+
+        cpu.write_internal_io(CNTR, 0x20);
+        assert!(cpu.csio_rx_push(0x44));
+        cpu.finish_step(80);
+        cpu.write_internal_io(CNTR, 0x00);
+        cpu.finish_step(160);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0xa0, 0);
+        assert_eq!(cpu.io_reg_peek(TRD as u8), 0x33);
+    }
+
+    #[test]
+    fn csio_ef_eie_interrupt_protocol_and_vector_delivery_match_um0050() {
+        let mut cpu = machine();
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.write_internal_io(IL, 0xa0);
+        cpu.mem_poke(0, 0x76);
+        cpu.mem_poke(0x20ac, 0x56);
+        cpu.mem_poke(0x20ad, 0x34);
+        cpu.set_reg(Reg::IR, 0x2000);
+        cpu.set_reg(Reg::SP, 0x8000);
+        cpu.set_iff1(true);
+
+        assert_eq!(cpu.step(), 3);
+        assert!(cpu.halted());
+        cpu.write_internal_io(TRD, 0xa5);
+        cpu.write_internal_io(CNTR, 0x50);
+        cpu.finish_step(160);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0xd0, 0xc0);
+        assert_eq!(cpu.internal_irq_pending & 0x10, 0x10);
+
+        assert_eq!(cpu.step(), 18);
+        assert_eq!(cpu.reg(Reg::PC), 0x3456);
+        assert_eq!(cpu.reg(Reg::SP), 0x7ffe);
+        assert_eq!(cpu.read_internal_io(TRD), 0xa5);
+        assert_eq!(cpu.internal_irq_pending & 0x10, 0);
+    }
+
+    #[test]
+    fn csio_external_clock_waits_and_reset_iostop_preserve_trd() {
+        let mut cpu = machine();
+        cpu.write_internal_io(TRD, 0xa5);
+        cpu.write_internal_io(CNTR, 0x57);
+        cpu.finish_step(1_000_000);
+        assert_eq!(cpu.csio_tx_pop(), None);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0x90, 0x10);
+
+        cpu.write_internal_io(ICR, 0x20);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8), 0x47, "IOSTOP preserves EIE");
+        cpu.write_internal_io(CNTR, 0x50);
+        cpu.write_internal_io(TRD, 0x5a);
+        assert_eq!(cpu.io_reg_peek(CNTR as u8) & 0xb0, 0);
+        cpu.finish_step(160);
+        assert_eq!(cpu.csio_tx_pop(), None);
+
+        cpu.reset();
+        assert_eq!(cpu.io_reg_peek(CNTR as u8), 0x07);
+        assert_eq!(cpu.io_reg_peek(TRD as u8), 0x5a);
     }
 
     #[test]

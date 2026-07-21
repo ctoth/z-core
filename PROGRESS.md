@@ -1853,6 +1853,56 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 The formatting check completed with no output. P6.3 is complete; P6.4 CSI/O
 is the next unchecked Phase 6 task. Gate G6 remains open.
 
+### P6.4 — CSI/O (2026-07-21)
+
+The clocked serial port now models one unbuffered, half-duplex 8-bit transfer.
+Setting TE starts transmission from TRD; setting RE makes the receive shift
+stage ready for `csio_rx_push`. Completion clears the active enable, sets EF,
+and either makes the byte available through `csio_tx_pop` or places it in TRD.
+TRD reads and writes clear EF, and software clearing RE or TE aborts the active
+operation immediately.
+
+All seven internal speed selections use the UM0050 Table 22 divisors: one bit
+consumes `20 << SS` phi cycles and one byte consumes `160 << SS` cycles for
+SS=0 through 6. SS=7 selects external CKS; because the fixed public API has no
+CKS edge source, such a transfer remains active until software aborts it. The
+RXS/CTS1 pin multiplex requires CTS1E clear before receive can start.
+
+EF and EIE directly qualify the existing CSI/O internal interrupt request and
+vector. RESET restores CNTR to 07h while preserving TRD. I/O STOP clears
+EF/RE/TE and aborts transfer for the duration of the mode, preserves EIE and
+TRD, and prevents later CNTR writes from restarting the peripheral until the
+mode is cleared.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core csio_ -- --nocapture
+running 5 tests
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 64 tests
+test result: ok. 64 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.74s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.4 is complete; P6.5
+DMA0/DMA1 is the next unchecked Phase 6 task. Gate G6 remains open.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential

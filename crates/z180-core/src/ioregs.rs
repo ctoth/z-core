@@ -9,6 +9,8 @@ pub(crate) const TDR0: usize = 0x06;
 pub(crate) const TDR1: usize = 0x07;
 pub(crate) const RDR0: usize = 0x08;
 pub(crate) const RDR1: usize = 0x09;
+pub(crate) const CNTR: usize = 0x0a;
+pub(crate) const TRD: usize = 0x0b;
 pub(crate) const TMDR0L: usize = 0x0c;
 pub(crate) const TMDR0H: usize = 0x0d;
 pub(crate) const RLDR0L: usize = 0x0e;
@@ -43,6 +45,7 @@ pub(crate) enum ReadEffect {
     AsciCntlb,
     AsciRdr,
     AsciStat,
+    CsioTrd,
     None,
     Tcr,
     TmdrHigh,
@@ -56,6 +59,8 @@ pub(crate) enum WriteEffect {
     AsciCntlb,
     AsciStat,
     AsciTdr,
+    CsioCntr,
+    CsioTrd,
     None,
     Dstat,
     Itc,
@@ -192,7 +197,7 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         write_mask: 0x77,
         availability: BOTH,
         read_effect: NONE,
-        write_effect: STORE,
+        write_effect: WriteEffect::CsioCntr,
     },
     // 0B TRD
     IoRegSpec {
@@ -200,8 +205,8 @@ pub(crate) const IO_REG_SPECS: [IoRegSpec; IO_REGISTER_COUNT] = [
         read_mask: 0xff,
         write_mask: 0xff,
         availability: BOTH,
-        read_effect: NONE,
-        write_effect: STORE,
+        read_effect: ReadEffect::CsioTrd,
+        write_effect: WriteEffect::CsioTrd,
     },
     // 0C TMDR0L
     IoRegSpec {
