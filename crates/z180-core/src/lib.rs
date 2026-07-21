@@ -14,9 +14,11 @@ pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
 use ioregs::{
-    ASTC0H, ASTC0L, ASTC1H, ASTC1L, BBR, CBAR, CBR, CNTLA0, CNTLB0, CNTR, DCNTL, FRC, ICR, IL,
-    IO_REG_SPECS, IO_REGISTER_COUNT, ITC, RDR0, RDR1, RLDR0H, RLDR0L, RLDR1H, RLDR1L, ReadEffect,
-    STAT0, STAT1, TCR, TDR0, TDR1, TMDR0H, TMDR0L, TMDR1H, TMDR1L, TRD, WriteEffect,
+    ASTC0H, ASTC0L, ASTC1H, ASTC1L, BBR, BCR0H, BCR0L, BCR1H, BCR1L, CBAR, CBR, CNTLA0, CNTLB0,
+    CNTR, DAR0B, DAR0H, DAR0L, DCNTL, DMODE, DSTAT, FRC, IAR1H, IAR1L, ICR, IL, IO_REG_SPECS,
+    IO_REGISTER_COUNT, ITC, MAR1B, MAR1H, MAR1L, RDR0, RDR1, RLDR0H, RLDR0L, RLDR1H, RLDR1L,
+    ReadEffect, SAR0B, SAR0H, SAR0L, STAT0, STAT1, TCR, TDR0, TDR1, TMDR0H, TMDR0L, TMDR1H, TMDR1L,
+    TRD, WriteEffect,
 };
 use memory::Memory;
 use optable::{
@@ -95,6 +97,8 @@ pub struct Z180<B: HostBus> {
     irq_lines: [bool; 3],
     nmi_level: bool,
     nmi_pending: bool,
+    dreq_level: [bool; 2],
+    dreq_edge_pending: [bool; 2],
     // Phase 6 peripherals set these bits only after their own enable and
     // request conditions are satisfied; this controller owns priority only.
     internal_irq_pending: u8,
@@ -153,6 +157,8 @@ impl<B: HostBus> Z180<B> {
             irq_lines: [false; 3],
             nmi_level: false,
             nmi_pending: false,
+            dreq_level: [false; 2],
+            dreq_edge_pending: [false; 2],
             internal_irq_pending: 0,
             frc_cycle_remainder: 0,
             prt_cycle_remainder: 0,
@@ -192,6 +198,9 @@ impl<B: HostBus> Z180<B> {
             self.io_regs[RDR1],
             self.io_regs[TRD],
         ];
+        let mut dma_registers = [0_u8; 15];
+        dma_registers[..13].copy_from_slice(&self.io_regs[SAR0L..=IAR1H]);
+        dma_registers[13..].copy_from_slice(&self.io_regs[BCR1L..=BCR1H]);
         for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
             self.io_regs[index] = if spec.is_available(self.variant) {
                 spec.reset
@@ -204,6 +213,8 @@ impl<B: HostBus> Z180<B> {
         self.io_regs[RDR0] = asci_data[2];
         self.io_regs[RDR1] = asci_data[3];
         self.io_regs[TRD] = asci_data[4];
+        self.io_regs[SAR0L..=IAR1H].copy_from_slice(&dma_registers[..13]);
+        self.io_regs[BCR1L..=BCR1H].copy_from_slice(&dma_registers[13..]);
         self.recompute_mmu_pages();
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
@@ -218,6 +229,8 @@ impl<B: HostBus> Z180<B> {
         self.irq_lines = [false; 3];
         self.nmi_level = false;
         self.nmi_pending = false;
+        self.dreq_level = [false; 2];
+        self.dreq_edge_pending = [false; 2];
         self.internal_irq_pending = 0;
         self.frc_cycle_remainder = 0;
         self.prt_cycle_remainder = 0;
@@ -252,17 +265,24 @@ impl<B: HostBus> Z180<B> {
         self.timing_memory_waits = 0;
         self.timing_io_waits = 0;
 
+        let dma_cycles = self.service_dma();
+        if dma_cycles != 0 {
+            self.finish_step(dma_cycles);
+        }
+
         if let Some(cycles) = self.interrupt_check_point() {
-            return self.finish_step(cycles.saturating_add(self.wait_cycles()));
+            return dma_cycles
+                .saturating_add(self.finish_step(cycles.saturating_add(self.wait_cycles())));
         }
 
         if self.halted {
             let _ = self.read_logical(self.registers.get(Reg::PC));
-            return self
-                .finish_step(u32::from(HALT_IDLE_CYCLES).saturating_add(self.wait_cycles()));
+            return dma_cycles.saturating_add(
+                self.finish_step(u32::from(HALT_IDLE_CYCLES).saturating_add(self.wait_cycles())),
+            );
         }
         if self.sleeping {
-            return 0;
+            return dma_cycles;
         }
 
         let pc = self.registers.get(Reg::PC);
@@ -326,7 +346,9 @@ impl<B: HostBus> Z180<B> {
             } else {
                 SECOND_OPCODE_TRAP_CYCLES
             };
-            return self.finish_step(u32::from(cycles).saturating_add(self.wait_cycles()));
+            return dma_cycles.saturating_add(
+                self.finish_step(u32::from(cycles).saturating_add(self.wait_cycles())),
+            );
         };
         debug_assert!(!descriptor.mnemonic.is_empty());
         debug_assert!(descriptor.length != 0);
@@ -354,7 +376,7 @@ impl<B: HostBus> Z180<B> {
                 self.timing_repeat_iterations,
                 repeat_completed,
             );
-        self.finish_step(cycles.saturating_add(self.wait_cycles()))
+        dma_cycles.saturating_add(self.finish_step(cycles.saturating_add(self.wait_cycles())))
     }
 
     pub fn run(&mut self, cycles: u32) -> u32 {
@@ -516,9 +538,20 @@ impl<B: HostBus> Z180<B> {
         self.irq_lines[index] = level;
     }
 
+    pub fn set_dreq(&mut self, ch: usize, level: bool) {
+        let Some(current) = self.dreq_level.get_mut(ch) else {
+            return;
+        };
+        if level && !*current {
+            self.dreq_edge_pending[ch] = true;
+        }
+        *current = level;
+    }
+
     pub fn set_nmi(&mut self, level: bool) {
         if level && !self.nmi_level {
             self.nmi_pending = true;
+            self.io_regs[DSTAT] &= !0x01;
         }
         self.nmi_level = level;
     }
@@ -1951,7 +1984,9 @@ impl<B: HostBus> Z180<B> {
                 trap | ufo | (value & 0x07)
             }
         };
-        if spec.write_effect == WriteEffect::Mmu {
+        if spec.write_effect == WriteEffect::Dstat {
+            self.update_dma_interrupt_requests();
+        } else if spec.write_effect == WriteEffect::Mmu {
             self.recompute_mmu_pages();
         } else if spec.write_effect == WriteEffect::Tcr {
             self.update_prt_interrupt_requests();
@@ -2382,6 +2417,228 @@ impl<B: HostBus> Z180<B> {
         }
     }
 
+    fn dma0_transfer_byte(&mut self) -> u32 {
+        let source_mode = (self.io_regs[DMODE] >> 2) & 0x03;
+        let destination_mode = (self.io_regs[DMODE] >> 4) & 0x03;
+        let source = u32::from(self.io_regs[SAR0L])
+            | (u32::from(self.io_regs[SAR0H]) << 8)
+            | (u32::from(self.io_regs[SAR0B] & 0x0f) << 16);
+        let destination = u32::from(self.io_regs[DAR0L])
+            | (u32::from(self.io_regs[DAR0H]) << 8)
+            | (u32::from(self.io_regs[DAR0B] & 0x0f) << 16);
+
+        let byte = if source_mode == 3 {
+            self.dma_io_read(source as u16)
+        } else {
+            self.memory.read(&mut self.bus, source)
+        };
+        if destination_mode == 3 {
+            self.dma_io_write(destination as u16, byte);
+        } else {
+            self.memory.write(&mut self.bus, destination, byte);
+        }
+
+        let memory_waits = u32::from((self.io_regs[DCNTL] >> 6) & 0x03);
+        let io_waits = u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1);
+        let mut cycles = 6_u32
+            .saturating_add(if source_mode == 3 {
+                io_waits
+            } else {
+                memory_waits
+            })
+            .saturating_add(if destination_mode == 3 {
+                io_waits
+            } else {
+                memory_waits
+            });
+
+        let (next_source, source_crossed) = match source_mode {
+            0 => (
+                source.wrapping_add(1) & 0x000f_ffff,
+                source & 0xffff == 0xffff,
+            ),
+            1 => (source.wrapping_sub(1) & 0x000f_ffff, source & 0xffff == 0),
+            _ => (source, false),
+        };
+        let (next_destination, destination_crossed) = match destination_mode {
+            0 => (
+                destination.wrapping_add(1) & 0x000f_ffff,
+                destination & 0xffff == 0xffff,
+            ),
+            1 => (
+                destination.wrapping_sub(1) & 0x000f_ffff,
+                destination & 0xffff == 0,
+            ),
+            _ => (destination, false),
+        };
+        if memory_waits == 0 {
+            cycles = cycles
+                .saturating_add(u32::from(source_crossed))
+                .saturating_add(u32::from(destination_crossed));
+        }
+
+        self.io_regs[SAR0L] = next_source as u8;
+        self.io_regs[SAR0H] = (next_source >> 8) as u8;
+        self.io_regs[SAR0B] = (next_source >> 16) as u8 & 0x0f;
+        self.io_regs[DAR0L] = next_destination as u8;
+        self.io_regs[DAR0H] = (next_destination >> 8) as u8;
+        self.io_regs[DAR0B] = (next_destination >> 16) as u8 & 0x0f;
+
+        let count = u16::from_le_bytes([self.io_regs[BCR0L], self.io_regs[BCR0H]]) - 1;
+        [self.io_regs[BCR0L], self.io_regs[BCR0H]] = count.to_le_bytes();
+        if count == 0 {
+            self.io_regs[DSTAT] &= !0x40;
+            self.update_dma_interrupt_requests();
+        }
+        cycles
+    }
+
+    fn dma1_transfer_byte(&mut self) -> u32 {
+        let mode = self.io_regs[DCNTL] & 0x03;
+        let memory_to_io = mode & 0x02 == 0;
+        let memory = u32::from(self.io_regs[MAR1L])
+            | (u32::from(self.io_regs[MAR1H]) << 8)
+            | (u32::from(self.io_regs[MAR1B] & 0x0f) << 16);
+        let io = u16::from_le_bytes([self.io_regs[IAR1L], self.io_regs[IAR1H]]);
+
+        if memory_to_io {
+            let byte = self.memory.read(&mut self.bus, memory);
+            self.dma_io_write(io, byte);
+        } else {
+            let byte = self.dma_io_read(io);
+            self.memory.write(&mut self.bus, memory, byte);
+        }
+
+        let memory_waits = u32::from((self.io_regs[DCNTL] >> 6) & 0x03);
+        let io_waits = u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1);
+        let decrements = mode & 0x01 != 0;
+        let crossed = if decrements {
+            memory & 0xffff == 0
+        } else {
+            memory & 0xffff == 0xffff
+        };
+        let next_memory = if decrements {
+            memory.wrapping_sub(1) & 0x000f_ffff
+        } else {
+            memory.wrapping_add(1) & 0x000f_ffff
+        };
+        self.io_regs[MAR1L] = next_memory as u8;
+        self.io_regs[MAR1H] = (next_memory >> 8) as u8;
+        self.io_regs[MAR1B] = (next_memory >> 16) as u8 & 0x0f;
+
+        let count = u16::from_le_bytes([self.io_regs[BCR1L], self.io_regs[BCR1H]]) - 1;
+        [self.io_regs[BCR1L], self.io_regs[BCR1H]] = count.to_le_bytes();
+        if count == 0 {
+            self.io_regs[DSTAT] &= !0x80;
+            self.update_dma_interrupt_requests();
+        }
+
+        6_u32
+            .saturating_add(memory_waits)
+            .saturating_add(io_waits)
+            .saturating_add(u32::from(crossed && memory_waits == 0))
+    }
+
+    fn dma_io_read(&mut self, port: u16) -> u8 {
+        if let Some(index) = self.internal_io_index(port) {
+            let _ = self.bus.io_read(port);
+            self.read_internal_io(index)
+        } else {
+            self.bus.io_read(port)
+        }
+    }
+
+    fn dma_io_write(&mut self, port: u16, value: u8) {
+        if let Some(index) = self.internal_io_index(port) {
+            self.bus.io_write(port, value);
+            self.write_internal_io(index, value);
+        } else {
+            self.bus.io_write(port, value);
+        }
+    }
+
+    fn service_dma(&mut self) -> u32 {
+        if self.io_regs[DSTAT] & 0x01 == 0 {
+            return 0;
+        }
+
+        if self.io_regs[DSTAT] & 0x40 != 0 {
+            let count = u16::from_le_bytes([self.io_regs[BCR0L], self.io_regs[BCR0H]]);
+            if count == 0 {
+                self.io_regs[DSTAT] &= !0x40;
+                self.update_dma_interrupt_requests();
+            } else {
+                let source_mode = (self.io_regs[DMODE] >> 2) & 0x03;
+                let destination_mode = (self.io_regs[DMODE] >> 4) & 0x03;
+                let memory_to_memory = source_mode < 2 && destination_mode < 2;
+                let valid = !(source_mode >= 2 && destination_mode >= 2);
+
+                if memory_to_memory {
+                    self.dreq_edge_pending[0] = false;
+                    let transfers = if self.io_regs[DMODE] & 0x02 != 0 {
+                        count
+                    } else {
+                        1
+                    };
+                    let mut cycles = 0_u32;
+                    for _ in 0..transfers {
+                        cycles = cycles.saturating_add(self.dma0_transfer_byte());
+                    }
+                    return cycles;
+                }
+
+                if valid && self.dma_request_ready(0) {
+                    let edge_sense = self.io_regs[DCNTL] & 0x08 != 0;
+                    self.dreq_edge_pending[0] = false;
+                    let transfers = if edge_sense { 1 } else { count };
+                    let mut cycles = 0_u32;
+                    for _ in 0..transfers {
+                        cycles = cycles.saturating_add(self.dma0_transfer_byte());
+                    }
+                    return cycles;
+                }
+            }
+        }
+
+        if self.io_regs[DSTAT] & 0x80 != 0 {
+            let count = u16::from_le_bytes([self.io_regs[BCR1L], self.io_regs[BCR1H]]);
+            if count == 0 {
+                self.io_regs[DSTAT] &= !0x80;
+                self.update_dma_interrupt_requests();
+            } else if self.dma_request_ready(1) {
+                let edge_sense = self.io_regs[DCNTL] & 0x04 != 0;
+                self.dreq_edge_pending[1] = false;
+                let transfers = if edge_sense { 1 } else { count };
+                let mut cycles = 0_u32;
+                for _ in 0..transfers {
+                    cycles = cycles.saturating_add(self.dma1_transfer_byte());
+                }
+                return cycles;
+            }
+        }
+
+        0
+    }
+
+    fn dma_request_ready(&self, channel: usize) -> bool {
+        let edge_sense = self.io_regs[DCNTL] & if channel == 0 { 0x08 } else { 0x04 } != 0;
+        if edge_sense {
+            self.dreq_edge_pending[channel]
+        } else {
+            self.dreq_level[channel]
+        }
+    }
+
+    fn update_dma_interrupt_requests(&mut self) {
+        self.internal_irq_pending &= !0x0c;
+        if self.io_regs[DSTAT] & 0x44 == 0x04 {
+            self.internal_irq_pending |= 0x04;
+        }
+        if self.io_regs[DSTAT] & 0x88 == 0x08 {
+            self.internal_irq_pending |= 0x08;
+        }
+    }
+
     fn wait_cycles(&self) -> u32 {
         self.timing_memory_waits
             .saturating_add(self.timing_io_waits)
@@ -2678,6 +2935,255 @@ mod tests {
         s180.io_regs[0x04] |= 0x80;
         s180.write_internal_io(0x08, 0x5a);
         assert_eq!(s180.io_reg_peek(0x08), 0xa5, "RDRF blocks S180 RDR writes");
+    }
+
+    #[test]
+    fn dma_dstat_enable_protocol_and_level_interrupts_match_um0050() {
+        let mut cpu = machine();
+
+        cpu.write_internal_io(DSTAT, 0xff);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8), 0x3c, "high DWE blocks DE");
+        assert_eq!(cpu.internal_irq_pending & 0x0c, 0x0c, "inactive DE + DIE");
+
+        cpu.write_internal_io(DSTAT, 0xcf);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8), 0xfd, "low DWE writes both DE");
+        assert_eq!(cpu.internal_irq_pending & 0x0c, 0, "enabled channels");
+
+        cpu.write_internal_io(DSTAT, 0x2c);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8), 0xbd, "only DE0 clears");
+        assert_eq!(cpu.internal_irq_pending & 0x0c, 0x04, "DMA0 level request");
+
+        cpu.write_internal_io(DSTAT, 0x18);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8), 0x39, "only DE1 clears");
+        assert_eq!(cpu.internal_irq_pending & 0x0c, 0x08, "DMA1 level request");
+    }
+
+    #[test]
+    fn dma0_memory_copy_modes_and_cycle_costs_match_um0050() {
+        let mut burst = machine();
+        for (offset, byte) in [0x11_u8, 0x22, 0x33].into_iter().enumerate() {
+            burst.mem_poke(0x0100 + offset as u32, byte);
+        }
+        burst.write_internal_io(SAR0L, 0x00);
+        burst.write_internal_io(SAR0H, 0x01);
+        burst.write_internal_io(SAR0B, 0x00);
+        burst.write_internal_io(DAR0L, 0x00);
+        burst.write_internal_io(DAR0H, 0x02);
+        burst.write_internal_io(DAR0B, 0x00);
+        burst.write_internal_io(BCR0L, 0x03);
+        burst.write_internal_io(BCR0H, 0x00);
+        burst.write_internal_io(DMODE, 0x02);
+        burst.write_internal_io(DCNTL, 0x80);
+        burst.write_internal_io(DSTAT, 0x64);
+
+        assert_eq!(burst.step(), 35, "3 * (6 + 2 + 2) DMA + 3 + 2 NOP");
+        assert_eq!(burst.mem_peek(0x0200), 0x11);
+        assert_eq!(burst.mem_peek(0x0201), 0x22);
+        assert_eq!(burst.mem_peek(0x0202), 0x33);
+        assert_eq!(burst.io_reg_peek(SAR0L as u8), 0x03);
+        assert_eq!(burst.io_reg_peek(DAR0L as u8), 0x03);
+        assert_eq!(burst.io_reg_peek(BCR0L as u8), 0x00);
+        assert_eq!(
+            burst.io_reg_peek(DSTAT as u8),
+            0x35,
+            "DE0 clears, DIE0 stays"
+        );
+        assert_eq!(burst.internal_irq_pending & 0x04, 0x04);
+
+        let mut steal = machine();
+        steal.mem_poke(0x0101, 0xa1);
+        steal.mem_poke(0x0100, 0xa0);
+        steal.write_internal_io(SAR0L, 0x01);
+        steal.write_internal_io(SAR0H, 0x01);
+        steal.write_internal_io(DAR0L, 0x01);
+        steal.write_internal_io(DAR0H, 0x02);
+        steal.write_internal_io(BCR0L, 0x02);
+        steal.write_internal_io(DMODE, 0x14);
+        steal.write_internal_io(DCNTL, 0x00);
+        steal.write_internal_io(DSTAT, 0x60);
+
+        assert_eq!(steal.step(), 9, "one 6-cycle DMA byte + one 3-cycle NOP");
+        assert_eq!(steal.mem_peek(0x0201), 0xa1);
+        assert_eq!(steal.mem_peek(0x0200), 0x00);
+        assert_eq!(steal.io_reg_peek(BCR0L as u8), 0x01);
+        assert_eq!(steal.step(), 9);
+        assert_eq!(steal.mem_peek(0x0200), 0xa0);
+        assert_eq!(steal.io_reg_peek(BCR0L as u8), 0x00);
+
+        let mut crossing = mmu_machine();
+        crossing.mem_poke(0x0fffe, 0xd0);
+        crossing.mem_poke(0x0ffff, 0xd1);
+        crossing.mem_poke(0x10000, 0xd2);
+        crossing.write_internal_io(SAR0L, 0xfe);
+        crossing.write_internal_io(SAR0H, 0xff);
+        crossing.write_internal_io(SAR0B, 0x00);
+        crossing.write_internal_io(DAR0L, 0xfe);
+        crossing.write_internal_io(DAR0H, 0xff);
+        crossing.write_internal_io(DAR0B, 0x01);
+        crossing.write_internal_io(BCR0L, 0x03);
+        crossing.write_internal_io(DMODE, 0x02);
+        crossing.write_internal_io(DCNTL, 0x00);
+        crossing.write_internal_io(DSTAT, 0x60);
+        assert_eq!(
+            crossing.step(),
+            23,
+            "3 * 6 DMA + two A15/A16 carry states + 3-cycle NOP"
+        );
+        assert_eq!(crossing.mem_peek(0x1fffe), 0xd0);
+        assert_eq!(crossing.mem_peek(0x1ffff), 0xd1);
+        assert_eq!(crossing.mem_peek(0x20000), 0xd2);
+    }
+
+    #[test]
+    fn dma0_edge_sense_transfers_memory_and_io_in_both_directions() {
+        let mut cpu = recording_machine(Variant::Z80180);
+        cpu.mem_poke(0x0300, 0x41);
+        cpu.mem_poke(0x0301, 0x42);
+        cpu.write_internal_io(SAR0L, 0x00);
+        cpu.write_internal_io(SAR0H, 0x03);
+        cpu.write_internal_io(DAR0L, 0x34);
+        cpu.write_internal_io(DAR0H, 0x12);
+        cpu.write_internal_io(BCR0L, 0x02);
+        cpu.write_internal_io(DMODE, 0x30);
+        cpu.write_internal_io(DCNTL, 0x08);
+        cpu.write_internal_io(DSTAT, 0x60);
+        cpu.set_dreq(0, true);
+
+        assert_eq!(cpu.step(), 10, "6 + one I/O wait + 3-cycle NOP");
+        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x41)]);
+        assert_eq!(cpu.io_reg_peek(BCR0L as u8), 0x01);
+        assert_eq!(cpu.step(), 3, "held edge-sense DREQ does not retrigger");
+        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x41)]);
+        cpu.set_dreq(0, false);
+        cpu.set_dreq(0, true);
+        assert_eq!(cpu.step(), 10);
+        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x41), (0x1234, 0x42)]);
+
+        cpu.bus.io_read_value = 0x5a;
+        cpu.write_internal_io(SAR0L, 0x78);
+        cpu.write_internal_io(SAR0H, 0x56);
+        cpu.write_internal_io(DAR0L, 0x00);
+        cpu.write_internal_io(DAR0H, 0x05);
+        cpu.write_internal_io(BCR0L, 0x01);
+        cpu.write_internal_io(DMODE, 0x0c);
+        cpu.write_internal_io(DSTAT, 0x60);
+        cpu.set_dreq(0, false);
+        cpu.set_dreq(0, true);
+        assert_eq!(cpu.step(), 10);
+        assert_eq!(cpu.bus.io_reads, vec![0x5678]);
+        assert_eq!(cpu.mem_peek(0x0500), 0x5a);
+    }
+
+    #[test]
+    fn dma1_level_sense_uses_scripted_host_bus_in_both_directions() {
+        let mut cpu = recording_machine(Variant::Z80180);
+        cpu.mem_poke(0x0300, 0x71);
+        cpu.mem_poke(0x0301, 0x72);
+        cpu.write_internal_io(MAR1L, 0x00);
+        cpu.write_internal_io(MAR1H, 0x03);
+        cpu.write_internal_io(IAR1L, 0x34);
+        cpu.write_internal_io(IAR1H, 0x12);
+        cpu.write_internal_io(BCR1L, 0x02);
+        cpu.write_internal_io(DCNTL, 0x10);
+        cpu.write_internal_io(DSTAT, 0x90);
+        cpu.set_dreq(1, true);
+
+        assert_eq!(cpu.step(), 19, "2 * (6 + 2 I/O waits) + 3-cycle NOP");
+        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x71), (0x1234, 0x72)]);
+        assert_eq!(cpu.io_reg_peek(MAR1L as u8), 0x02);
+        assert_eq!(cpu.io_reg_peek(BCR1L as u8), 0x00);
+
+        cpu.bus.io_read_value = 0xa5;
+        cpu.write_internal_io(MAR1L, 0x01);
+        cpu.write_internal_io(MAR1H, 0x04);
+        cpu.write_internal_io(IAR1L, 0x78);
+        cpu.write_internal_io(IAR1H, 0x56);
+        cpu.write_internal_io(BCR1L, 0x02);
+        cpu.write_internal_io(DCNTL, 0x13);
+        cpu.write_internal_io(DSTAT, 0x90);
+
+        assert_eq!(cpu.step(), 19, "2 * (6 + 2 I/O waits) + 3-cycle NOP");
+        assert_eq!(cpu.bus.io_reads, vec![0x5678, 0x5678]);
+        assert_eq!(cpu.mem_peek(0x0401), 0xa5);
+        assert_eq!(cpu.mem_peek(0x0400), 0xa5);
+        assert_eq!(cpu.io_reg_peek(MAR1L as u8), 0xff);
+        assert_eq!(cpu.io_reg_peek(MAR1H as u8), 0x03);
+    }
+
+    #[test]
+    fn dma0_has_priority_over_dma1_when_both_requests_are_ready() {
+        let mut cpu = recording_machine(Variant::Z80180);
+        cpu.mem_poke(0x0300, 0xa0);
+        cpu.mem_poke(0x0400, 0xb1);
+        cpu.write_internal_io(SAR0L, 0x00);
+        cpu.write_internal_io(SAR0H, 0x03);
+        cpu.write_internal_io(DAR0L, 0x11);
+        cpu.write_internal_io(DAR0H, 0x11);
+        cpu.write_internal_io(BCR0L, 0x01);
+        cpu.write_internal_io(DMODE, 0x30);
+        cpu.write_internal_io(MAR1L, 0x00);
+        cpu.write_internal_io(MAR1H, 0x04);
+        cpu.write_internal_io(IAR1L, 0x22);
+        cpu.write_internal_io(IAR1H, 0x22);
+        cpu.write_internal_io(BCR1L, 0x01);
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.write_internal_io(DSTAT, 0xc0);
+        cpu.set_dreq(0, true);
+        cpu.set_dreq(1, true);
+
+        assert_eq!(cpu.step(), 10);
+        assert_eq!(cpu.bus.io_writes, vec![(0x1111, 0xa0)]);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8) & 0xc0, 0x80);
+        assert_eq!(cpu.step(), 10);
+        assert_eq!(cpu.bus.io_writes, vec![(0x1111, 0xa0), (0x2222, 0xb1)]);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8) & 0xc0, 0x00);
+    }
+
+    #[test]
+    fn nmi_stops_dma_until_de_is_rewritten_and_reset_preserves_progress() {
+        let mut cpu = machine();
+        cpu.mem_poke(0x0100, 0xc1);
+        cpu.mem_poke(0x0101, 0xc2);
+        cpu.write_internal_io(SAR0L, 0x00);
+        cpu.write_internal_io(SAR0H, 0x01);
+        cpu.write_internal_io(DAR0L, 0x00);
+        cpu.write_internal_io(DAR0H, 0x02);
+        cpu.write_internal_io(BCR0L, 0x02);
+        cpu.write_internal_io(DMODE, 0x00);
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.write_internal_io(DSTAT, 0x60);
+
+        cpu.set_nmi(true);
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8), 0x70, "NMI clears only DME");
+        assert_eq!(cpu.step(), 11);
+        assert_eq!(cpu.mem_peek(0x0200), 0x00);
+        assert_eq!(cpu.io_reg_peek(BCR0L as u8), 0x02);
+
+        cpu.set_nmi(false);
+        cpu.write_internal_io(DSTAT, 0x60);
+        assert_eq!(cpu.step(), 9);
+        assert_eq!(cpu.mem_peek(0x0200), 0xc1);
+        assert_eq!(cpu.io_reg_peek(BCR0L as u8), 0x01);
+
+        let preserved = [
+            cpu.io_reg_peek(SAR0L as u8),
+            cpu.io_reg_peek(SAR0H as u8),
+            cpu.io_reg_peek(DAR0L as u8),
+            cpu.io_reg_peek(DAR0H as u8),
+            cpu.io_reg_peek(BCR0L as u8),
+        ];
+        cpu.reset();
+        assert_eq!(cpu.io_reg_peek(DSTAT as u8), 0x30);
+        assert_eq!(
+            [
+                cpu.io_reg_peek(SAR0L as u8),
+                cpu.io_reg_peek(SAR0H as u8),
+                cpu.io_reg_peek(DAR0L as u8),
+                cpu.io_reg_peek(DAR0H as u8),
+                cpu.io_reg_peek(BCR0L as u8),
+            ],
+            preserved
+        );
     }
 
     #[test]

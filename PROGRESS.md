@@ -1903,6 +1903,62 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 The formatting check completed with no output. P6.4 is complete; P6.5
 DMA0/DMA1 is the next unchecked Phase 6 task. Gate G6 remains open.
 
+### P6.5 — DMA0/DMA1 (2026-07-21)
+
+Both DMA channels now execute from the existing internal-register state.
+DMA0 performs 20-bit physical memory-to-memory and memory-to/from-I/O
+transfers using SAR0, DAR0, BCR0, and DMODE; increment, decrement, fixed
+memory-mapped-I/O, fixed true-I/O, burst, and cycle-steal behavior follow the
+direct UM0050 mode tables. DMA1 performs memory-to/from-I/O using 20-bit MAR1,
+fixed 16-bit IAR1, BCR1, and the four DCNTL DIM combinations.
+
+DSTAT implements the active-low DWE write protocol, automatic DME enable,
+completion clearing of DE, and level `!DE && DIE` requests. The fixed
+`set_dreq(ch, level)` API uses logical assertion: level sense continues while
+asserted and edge sense permits one byte per assertion edge. DMA0 wins
+simultaneous channel requests, and automatic DMA0 memory-to-memory excludes
+DMA1 until termination. NMI clears DME while preserving restart state; RESET
+stops DMA, resets control state, and preserves the manual-named address/count
+registers.
+
+Each byte consumes the UM's two three-clock bus cycles plus DCNTL waits:
+`6 + 2*MWI` for memory-to-memory and `6 + MWI + IWI` for memory-to-I/O, where
+IWI includes the mandatory true-I/O wait. Zero-wait A15/A16 address crossings
+receive the internal Ti state. The documented v0.1 byte/instruction boundary
+drains burst transfers before the next instruction, performs one cycle-steal
+or edge-request byte per instruction boundary, and advances all other
+peripherals over DMA elapsed time before CPU interrupt sampling and fetch.
+
+Focused and final authorities:
+
+```text
+> cargo test -p z180-core dma -- --nocapture
+running 6 tests
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 70 tests
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check completed with no output. P6.5 is complete; P6.6
+peripheral-to-interrupt integration and pairwise priority tests are the next
+unchecked Phase 6 task. Gate G6 remains open.
+
 ## Phase 7 — Debug, trace, save-state, disassembler
 
 ## Phase 8 — Python binding, qns migration, reference differential

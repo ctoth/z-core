@@ -143,13 +143,33 @@ time before this approximation is accepted as final.
 
 ### DMA interleave granularity
 
-DMA is a Phase 6 feature. Its v0.1 timing granularity is one transferred byte:
-each byte will consume the UM0050 transfer cost plus the applicable DCNTL
-waits. Cycle-steal and burst modes will order those byte units according to
-their documented mode, interleaving them with the instruction-level CPU
-timeline rather than arbitrating individual T states. This preserves transfer
-order and elapsed-cycle effects while keeping `step()` atomic and the hot path
-free of bus-waveform machinery.
+DMA timing granularity is one transferred byte. Each byte consists of a
+three-clock read bus cycle and a three-clock write bus cycle. A memory access
+adds the DCNTL MWI value (zero through three); a true I/O access adds the DCNTL
+IWI total (one through four, including the mandatory I/O wait). The resulting
+costs are `6 + 2*MWI` for memory-to-memory and `6 + MWI + IWI` for
+memory-to-I/O. Memory-mapped I/O uses memory timing. When a DMA address carry
+or borrow crosses A15/A16, a zero-wait affected memory cycle receives the
+manual's internal Ti state so its minimum length is four clocks.
+
+The v0.1 scheduler orders those byte units on the instruction-level CPU
+timeline rather than arbitrating individual T states. DMA0 burst mode drains
+the enabled memory-to-memory count before the next CPU instruction. Cycle
+steal performs one byte before each instruction. An edge-sensed DREQ permits
+one byte; a level-sensed DREQ continues while logically asserted. Simultaneous
+ready channels select DMA0, and an active DMA0 memory-to-memory operation keeps
+DMA1 from running until DMA0 terminates. DMA elapsed time advances FRC, PRT,
+ASCI, and CSI/O through the same `finish_step` boundary before CPU interrupt
+sampling and fetch; `step()` returns the combined DMA and CPU/interrupt cycles
+while still executing at most one CPU instruction.
+
+The public `set_dreq(ch, true)` value means logical assertion, translating the
+UM's electrically active-low DREQ pins in the same way as the external
+interrupt APIs. NMI assertion clears DME before the next DMA byte. Because the
+model has no bus-phase callback, an NMI cannot suspend between the read and
+write halves of a byte; the byte boundary is the documented v0.1 suspension
+point. This preserves transfer order and elapsed-cycle effects while keeping
+`step()` atomic and the hot path free of bus-waveform machinery.
 
 ## Clock variants
 
