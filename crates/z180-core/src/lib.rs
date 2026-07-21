@@ -25,6 +25,7 @@ const FLAG_PV: u8 = 0x04;
 const FLAG_N: u8 = 0x02;
 const FLAG_C: u8 = 0x01;
 const FLAG_XY: u8 = FLAG_X | FLAG_Y;
+const DCNTL_RESET: u8 = 0xf0;
 
 pub trait HostBus {
     fn mem_read(&mut self, phys: u32) -> u8;
@@ -50,8 +51,11 @@ pub struct Z180<B: HostBus> {
     instruction_pc: u16,
     cycle_count: u64,
     variant: Variant,
+    dcntl: u8,
     timing_branch_taken: bool,
     timing_repeat_iterations: u16,
+    timing_memory_accesses: u16,
+    timing_io_accesses: u16,
     halted: bool,
     sleeping: bool,
     itc: u8,
@@ -71,8 +75,11 @@ impl<B: HostBus> Z180<B> {
             instruction_pc: 0,
             cycle_count: 0,
             variant: config.variant,
+            dcntl: DCNTL_RESET,
             timing_branch_taken: false,
             timing_repeat_iterations: 0,
+            timing_memory_accesses: 0,
+            timing_io_accesses: 0,
             halted: false,
             sleeping: false,
             itc: 0x01,
@@ -87,8 +94,11 @@ impl<B: HostBus> Z180<B> {
     pub fn reset(&mut self) {
         self.registers = Registers::default();
         self.instruction_pc = 0;
+        self.dcntl = DCNTL_RESET;
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
+        self.timing_memory_accesses = 0;
+        self.timing_io_accesses = 0;
         self.halted = false;
         self.sleeping = false;
         self.itc = 0x01;
@@ -100,12 +110,19 @@ impl<B: HostBus> Z180<B> {
     }
 
     pub fn step(&mut self) -> u32 {
+        self.timing_branch_taken = false;
+        self.timing_repeat_iterations = 0;
+        self.timing_memory_accesses = 0;
+        self.timing_io_accesses = 0;
+
         if let Some(cycles) = self.interrupt_check_point() {
-            return self.finish_step(cycles);
+            return self.finish_step(cycles.saturating_add(self.wait_cycles()));
         }
 
         if self.halted {
-            return self.finish_step(u32::from(HALT_IDLE_CYCLES));
+            let _ = self.read_logical(self.registers.get(Reg::PC));
+            return self
+                .finish_step(u32::from(HALT_IDLE_CYCLES).saturating_add(self.wait_cycles()));
         }
         if self.sleeping {
             return 0;
@@ -150,6 +167,17 @@ impl<B: HostBus> Z180<B> {
         };
         let Some(handler) = descriptor.handler else {
             if is_indexed_bit {
+                let displacement = self.read_logical(pc.wrapping_add(2)) as i8;
+                let index = if first_opcode == 0xfd {
+                    Reg::IY
+                } else {
+                    Reg::IX
+                };
+                let address = self
+                    .registers
+                    .get(index)
+                    .wrapping_add(i16::from(displacement) as u16);
+                let _ = self.read_logical(address);
                 self.take_trap([first_opcode, 0xcb, opcode], 3, pc.wrapping_add(4), true, 3);
             } else if matches!(first_opcode, 0xcb | 0xdd | 0xed | 0xfd) {
                 self.take_trap([first_opcode, opcode, 0], 2, pc.wrapping_add(2), false, 2);
@@ -161,7 +189,7 @@ impl<B: HostBus> Z180<B> {
             } else {
                 SECOND_OPCODE_TRAP_CYCLES
             };
-            return self.finish_step(u32::from(cycles));
+            return self.finish_step(u32::from(cycles).saturating_add(self.wait_cycles()));
         };
         debug_assert!(!descriptor.mnemonic.is_empty());
         debug_assert!(descriptor.length != 0);
@@ -177,8 +205,6 @@ impl<B: HostBus> Z180<B> {
         // establish a fresh one-instruction shadow.
         self.ei_shadow = false;
 
-        self.timing_branch_taken = false;
-        self.timing_repeat_iterations = 0;
         handler(self, opcode);
 
         let repeat_completed = self.registers.get(Reg::PC) != self.instruction_pc;
@@ -191,7 +217,7 @@ impl<B: HostBus> Z180<B> {
                 self.timing_repeat_iterations,
                 repeat_completed,
             );
-        self.finish_step(cycles)
+        self.finish_step(cycles.saturating_add(self.wait_cycles()))
     }
 
     pub fn run(&mut self, cycles: u32) -> u32 {
@@ -855,7 +881,7 @@ impl<B: HostBus> Z180<B> {
         match opcode {
             0x00 | 0x08 | 0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => {
                 let port = u16::from(self.read_logical(self.instruction_pc.wrapping_add(2)));
-                let value = self.bus.io_read(port);
+                let value = self.read_io(port);
                 let code = (opcode >> 3) & 0x07;
                 if code != 6 {
                     self.write_reg8(code, value);
@@ -867,14 +893,14 @@ impl<B: HostBus> Z180<B> {
             0x01 | 0x09 | 0x11 | 0x19 | 0x21 | 0x29 | 0x39 => {
                 let port = u16::from(self.read_logical(self.instruction_pc.wrapping_add(2)));
                 let value = self.read_reg8((opcode >> 3) & 0x07);
-                self.bus.io_write(port, value);
+                self.write_io(port, value);
             }
             0x04 | 0x0c | 0x14 | 0x1c | 0x24 | 0x2c | 0x34 | 0x3c => {
                 let result = self.accumulator() & self.read_reg8((opcode >> 3) & 0x07);
                 self.set_flags(Self::sign_zero_xy(result) | Self::parity_flag(result) | FLAG_H);
             }
             0x40 | 0x48 | 0x50 | 0x58 | 0x60 | 0x68 | 0x78 => {
-                let value = self.bus.io_read(self.registers.get(Reg::BC));
+                let value = self.read_io(self.registers.get(Reg::BC));
                 self.write_reg8((opcode >> 3) & 0x07, value);
                 self.set_flags(
                     Self::sign_zero_xy(value) | Self::parity_flag(value) | (self.flags() & FLAG_C),
@@ -882,7 +908,7 @@ impl<B: HostBus> Z180<B> {
             }
             0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x79 => {
                 let value = self.read_reg8((opcode >> 3) & 0x07);
-                self.bus.io_write(self.registers.get(Reg::BC), value);
+                self.write_io(self.registers.get(Reg::BC), value);
             }
             0x42 | 0x52 | 0x62 | 0x72 | 0x4a | 0x5a | 0x6a | 0x7a => {
                 let subtract = opcode & 0x08 == 0;
@@ -994,9 +1020,7 @@ impl<B: HostBus> Z180<B> {
             }
             0x74 => {
                 let mask = self.read_logical(self.instruction_pc.wrapping_add(2));
-                let value = self
-                    .bus
-                    .io_read(u16::from(self.registers.get(Reg::BC) as u8));
+                let value = self.read_io(u16::from(self.registers.get(Reg::BC) as u8));
                 let result = value & mask;
                 self.set_flags(Self::sign_zero_xy(result) | Self::parity_flag(result) | FLAG_H);
             }
@@ -1007,7 +1031,7 @@ impl<B: HostBus> Z180<B> {
                 loop {
                     let [b, c] = self.registers.get(Reg::BC).to_be_bytes();
                     let value = self.read_logical(self.registers.get(Reg::HL));
-                    self.bus.io_write(u16::from(c), value);
+                    self.write_io(u16::from(c), value);
                     let next_b = b.wrapping_sub(1);
                     let next_c = if decrement {
                         c.wrapping_sub(1)
@@ -1093,12 +1117,12 @@ impl<B: HostBus> Z180<B> {
                 let port = u16::from_be_bytes([if input { b } else { next_b }, c]);
                 let address = self.registers.get(Reg::HL);
                 let value = if input {
-                    let value = self.bus.io_read(port);
+                    let value = self.read_io(port);
                     self.write_logical(address, value);
                     value
                 } else {
                     let value = self.read_logical(address);
-                    self.bus.io_write(port, value);
+                    self.write_io(port, value);
                     value
                 };
                 self.registers.set(Reg::BC, u16::from_be_bytes([next_b, c]));
@@ -1258,9 +1282,9 @@ impl<B: HostBus> Z180<B> {
         let [b, c] = self.registers.get(Reg::BC).to_be_bytes();
         let next_b = b.wrapping_sub(1);
         self.registers.set(Reg::BC, u16::from_be_bytes([next_b, c]));
+        let displacement = self.immediate8();
         if next_b != 0 {
             self.timing_branch_taken = true;
-            let displacement = self.immediate8();
             self.registers
                 .set(Reg::PC, self.relative_target(displacement));
         }
@@ -1273,9 +1297,9 @@ impl<B: HostBus> Z180<B> {
     }
 
     pub(crate) fn execute_jr_condition(&mut self, opcode: u8) {
+        let displacement = self.immediate8();
         if self.condition((opcode >> 3) & 0x03) {
             self.timing_branch_taken = true;
-            let displacement = self.immediate8();
             self.registers
                 .set(Reg::PC, self.relative_target(displacement));
         }
@@ -1295,17 +1319,17 @@ impl<B: HostBus> Z180<B> {
     }
 
     pub(crate) fn execute_jp_condition(&mut self, opcode: u8) {
+        let target = self.immediate16();
         if self.condition((opcode >> 3) & 0x07) {
             self.timing_branch_taken = true;
-            let target = self.immediate16();
             self.registers.set(Reg::PC, target);
         }
     }
 
     pub(crate) fn execute_call_condition(&mut self, opcode: u8) {
+        let target = self.immediate16();
         if self.condition((opcode >> 3) & 0x07) {
             self.timing_branch_taken = true;
-            let target = self.immediate16();
             self.push_word(self.registers.get(Reg::PC));
             self.registers.set(Reg::PC, target);
         }
@@ -1339,7 +1363,7 @@ impl<B: HostBus> Z180<B> {
     pub(crate) fn execute_out_immediate(&mut self, _opcode: u8) {
         let accumulator = self.accumulator();
         let port = u16::from_be_bytes([accumulator, self.immediate8()]);
-        self.bus.io_write(port, accumulator);
+        self.write_io(port, accumulator);
     }
 
     pub(crate) fn execute_exx(&mut self, _opcode: u8) {
@@ -1358,7 +1382,7 @@ impl<B: HostBus> Z180<B> {
     pub(crate) fn execute_in_immediate(&mut self, _opcode: u8) {
         let accumulator = self.accumulator();
         let port = u16::from_be_bytes([accumulator, self.immediate8()]);
-        let value = self.bus.io_read(port);
+        let value = self.read_io(port);
         self.set_accumulator(value);
     }
 
@@ -1398,11 +1422,30 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn read_logical(&mut self, logical: u16) -> u8 {
+        self.timing_memory_accesses = self.timing_memory_accesses.saturating_add(1);
         self.memory.read(&mut self.bus, u32::from(logical))
     }
 
     fn write_logical(&mut self, logical: u16, value: u8) {
+        self.timing_memory_accesses = self.timing_memory_accesses.saturating_add(1);
         self.memory.write(&mut self.bus, u32::from(logical), value);
+    }
+
+    fn read_io(&mut self, port: u16) -> u8 {
+        self.timing_io_accesses = self.timing_io_accesses.saturating_add(1);
+        self.bus.io_read(port)
+    }
+
+    fn write_io(&mut self, port: u16, value: u8) {
+        self.timing_io_accesses = self.timing_io_accesses.saturating_add(1);
+        self.bus.io_write(port, value);
+    }
+
+    fn wait_cycles(&self) -> u32 {
+        let memory_waits = u32::from((self.dcntl >> 6) & 0x03);
+        let io_waits = u32::from(((self.dcntl >> 4) & 0x03) + 1);
+        u32::from(self.timing_memory_accesses) * memory_waits
+            + u32::from(self.timing_io_accesses) * io_waits
     }
 
     fn finish_step(&mut self, cycles: u32) -> u32 {
@@ -1537,7 +1580,7 @@ mod tests {
             cpu.set_iff1(true);
             cpu.set_iff2(false);
 
-            assert_eq!(cpu.step(), 17, "{opcodes:02x?}");
+            assert_eq!(cpu.step(), 29, "{opcodes:02x?}");
             assert_eq!(cpu.instruction_pc(), 0x1234, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::PC), 0, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{opcodes:02x?}");
@@ -1547,7 +1590,7 @@ mod tests {
             assert_eq!(cpu.itc(), 0x81, "{opcodes:02x?}");
             assert!(cpu.iff1(), "{opcodes:02x?}");
             assert!(!cpu.iff2(), "{opcodes:02x?}");
-            assert_eq!(cpu.cycle_count(), 17, "{opcodes:02x?}");
+            assert_eq!(cpu.cycle_count(), 29, "{opcodes:02x?}");
             assert_eq!(
                 cpu.drain_events(),
                 vec![Event::Trap {
@@ -1576,7 +1619,7 @@ mod tests {
             cpu.set_iff1(false);
             cpu.set_iff2(true);
 
-            assert_eq!(cpu.step(), 23, "{prefix:02x}");
+            assert_eq!(cpu.step(), 44, "{prefix:02x}");
             assert_eq!(cpu.instruction_pc(), 0x1234, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::PC), 0, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{prefix:02x}");
@@ -1586,7 +1629,7 @@ mod tests {
             assert_eq!(cpu.itc(), 0xc1, "{prefix:02x}");
             assert!(!cpu.iff1(), "{prefix:02x}");
             assert!(cpu.iff2(), "{prefix:02x}");
-            assert_eq!(cpu.cycle_count(), 23, "{prefix:02x}");
+            assert_eq!(cpu.cycle_count(), 44, "{prefix:02x}");
             assert_eq!(
                 cpu.drain_events(),
                 vec![Event::Trap {
@@ -1613,7 +1656,7 @@ mod tests {
                 cpu.reset();
                 cpu.set_reg(Reg::AF, u16::from_be_bytes([accumulator, initial_flags]));
 
-                assert_eq!(cpu.step(), 4);
+                assert_eq!(cpu.step(), 7);
 
                 let [actual_accumulator, actual_flags] = cpu.reg(Reg::AF).to_be_bytes();
                 let (expected_accumulator, expected_flags) =
@@ -1636,12 +1679,12 @@ mod tests {
         cpu.mem_poke(3, 0xfb);
         cpu.mem_poke(4, 0xf3);
 
-        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.step(), 6);
         assert!(cpu.iff1());
         assert!(cpu.iff2());
         assert!(cpu.ei_shadow);
 
-        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.step(), 6);
         assert!(!cpu.ei_shadow);
 
         cpu.step();
@@ -1695,14 +1738,14 @@ mod tests {
         cpu.set_reg(Reg::BC, 0x89ab);
         cpu.set_reg(Reg::IR, 0x34ff);
 
-        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.step(), 6);
 
         assert_eq!(cpu.instruction_pc(), 0x1234);
         assert_eq!(cpu.reg(Reg::PC), 0x1235);
         assert_eq!(cpu.reg(Reg::AF), 0x56d7);
         assert_eq!(cpu.reg(Reg::BC), 0x89ab);
         assert_eq!(cpu.reg(Reg::IR), 0x3480);
-        assert_eq!(cpu.cycle_count(), 3);
+        assert_eq!(cpu.cycle_count(), 6);
         assert!(!cpu.halted());
     }
 
@@ -1712,8 +1755,8 @@ mod tests {
         cpu.mem_poke(0, 0x76);
         cpu.set_reg(Reg::AF, 0x12a5);
 
-        assert_eq!(cpu.step(), 3);
-        assert_eq!(cpu.step(), 3);
+        assert_eq!(cpu.step(), 6);
+        assert_eq!(cpu.step(), 6);
 
         assert!(cpu.halted());
         assert_eq!(cpu.reg(Reg::PC), 1);
@@ -1799,7 +1842,7 @@ mod tests {
             cpu.set_reg(Reg::BC, 0x0210);
             cpu.set_reg(Reg::HL, initial_hl);
 
-            assert_eq!(cpu.step(), 30, "ED {opcode:02x}");
+            assert_eq!(cpu.step(), 50, "ED {opcode:02x}");
             assert_eq!(cpu.reg(Reg::AF), 0x5546, "ED {opcode:02x}");
             assert_eq!(cpu.reg(Reg::BC), u16::from(final_c), "ED {opcode:02x}");
             assert_eq!(cpu.reg(Reg::HL), final_hl, "ED {opcode:02x}");
@@ -1817,7 +1860,7 @@ mod tests {
         reti.set_iff1(false);
         reti.set_iff2(true);
 
-        assert_eq!(reti.step(), 22);
+        assert_eq!(reti.step(), 34);
 
         assert_eq!(reti.reg(Reg::PC), 0x1234);
         assert_eq!(reti.reg(Reg::SP), 0x2002);
@@ -1833,7 +1876,7 @@ mod tests {
         retn.set_iff1(false);
         retn.set_iff2(true);
 
-        assert_eq!(retn.step(), 12);
+        assert_eq!(retn.step(), 24);
 
         assert_eq!(retn.reg(Reg::PC), 0x5678);
         assert_eq!(retn.reg(Reg::SP), 0x2002);
@@ -1856,7 +1899,7 @@ mod tests {
         z8s180_reti.mem_poke(0x2000, 0x34);
         z8s180_reti.mem_poke(0x2001, 0x12);
         z8s180_reti.set_reg(Reg::SP, 0x2000);
-        assert_eq!(z8s180_reti.step(), 12);
+        assert_eq!(z8s180_reti.step(), 24);
     }
 
     #[test]
@@ -1866,7 +1909,7 @@ mod tests {
         call_not_taken.mem_poke(1, 0x34);
         call_not_taken.mem_poke(2, 0x12);
         call_not_taken.set_reg(Reg::AF, u16::from(FLAG_Z));
-        assert_eq!(call_not_taken.step(), 6);
+        assert_eq!(call_not_taken.step(), 15);
         assert_eq!(call_not_taken.reg(Reg::PC), 3);
 
         let mut call_taken = machine();
@@ -1874,7 +1917,7 @@ mod tests {
         call_taken.mem_poke(1, 0x34);
         call_taken.mem_poke(2, 0x12);
         call_taken.set_reg(Reg::SP, 0x2000);
-        assert_eq!(call_taken.step(), 16);
+        assert_eq!(call_taken.step(), 31);
         assert_eq!(call_taken.reg(Reg::PC), 0x1234);
 
         let mut ldir_terminal = machine();
@@ -1884,7 +1927,7 @@ mod tests {
         ldir_terminal.set_reg(Reg::BC, 1);
         ldir_terminal.set_reg(Reg::DE, 0x2000);
         ldir_terminal.set_reg(Reg::HL, 0x1000);
-        assert_eq!(ldir_terminal.step(), 12);
+        assert_eq!(ldir_terminal.step(), 24);
         assert_eq!(ldir_terminal.reg(Reg::PC), 2);
 
         let mut ldir_repeating = machine();
@@ -1894,7 +1937,33 @@ mod tests {
         ldir_repeating.set_reg(Reg::BC, 2);
         ldir_repeating.set_reg(Reg::DE, 0x2000);
         ldir_repeating.set_reg(Reg::HL, 0x1000);
-        assert_eq!(ldir_repeating.step(), 14);
+        assert_eq!(ldir_repeating.step(), 26);
         assert_eq!(ldir_repeating.reg(Reg::PC), 0);
+    }
+
+    #[test]
+    fn timing_applies_dcntl_memory_and_external_io_waits() {
+        let mut reset_nop = machine();
+        reset_nop.mem_poke(0, 0x00);
+        assert_eq!(reset_nop.dcntl, 0xf0);
+        assert_eq!(reset_nop.step(), 6);
+
+        let mut minimum_nop = machine();
+        minimum_nop.dcntl = 0x00;
+        minimum_nop.mem_poke(0, 0x00);
+        assert_eq!(minimum_nop.step(), 3);
+        minimum_nop.reset();
+        assert_eq!(minimum_nop.dcntl, 0xf0);
+
+        let mut reset_in = machine();
+        reset_in.mem_poke(0, 0xdb);
+        reset_in.mem_poke(1, 0x40);
+        assert_eq!(reset_in.step(), 19);
+
+        let mut programmed_in = machine();
+        programmed_in.dcntl = 0x50;
+        programmed_in.mem_poke(0, 0xdb);
+        programmed_in.mem_poke(1, 0x40);
+        assert_eq!(programmed_in.step(), 13);
     }
 }

@@ -1112,6 +1112,45 @@ The format check completed successfully with no output. Gate G4 remains in
 progress; Phase 4 task 2, DCNTL memory/I-O wait-state insertion, is the next
 unchecked plan item.
 
+### P4.2 — DCNTL wait-state insertion (2026-07-21)
+
+CPU execution now counts every memory and external-I/O access made during a
+step and adds the waits selected by DCNTL to the base timing from `optable.rs`.
+Bits 7–6 provide 0–3 memory waits and bits 5–4 provide 1–4 external-I/O
+waits. DCNTL resets to `F0h`, selecting the verified maximum of three memory
+and four external-I/O waits; the verification log records the manual's
+contradictory register-table reset row and the controlling prose evidence.
+
+Conditional DJNZ/JR/JP/CALL paths now fetch their operand bytes even when the
+condition is false, so their memory waits reflect the actual bus cycles.
+Third-opcode TRAP performs its documented displacement and effective-address
+reads before stacking. HALT-mode idle performs the Figure 20 memory read at
+the address following HALT, so its three-state base cycle also receives the
+programmed memory waits. Existing external-I/O instructions all route through
+the counted private path; no public DCNTL configuration surface was added
+ahead of the Phase 5 internal-I/O register table.
+
+Repository gates pass:
+
+```text
+> cargo test -p z180-core timing
+5 passed; 0 failed
+
+> cargo test --workspace
+z180-cli: 15 passed; 0 failed
+z180-core: 26 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo]
+
+> cargo fmt --all -- --check
+```
+
+The format check completed successfully with no output. Gate G4 remains in
+progress; Phase 4 task 3, `docs/timing-notes.md`, is the next unchecked plan
+item.
+
 ## Phase 5 — Interrupts, MMU, internal I/O window
 
 ## Phase 6 — On-chip peripherals
