@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
-use z180_core::{HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180};
+use z180_core::{Event, HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180};
 
 const PROGRAM_BASE: u16 = 0x0100;
 const BDOS_ENTRY: u16 = 0x0005;
@@ -72,7 +72,17 @@ fn run_program(program: &[u8], output: &mut impl Write) -> Result<()> {
         }
 
         let opcode = cpu.mem_peek(u32::from(pc));
-        if cpu.step() == 0 {
+        let step_cycles = cpu.step();
+        if let Some(Event::Trap {
+            cycle,
+            pc,
+            opcode,
+            len,
+        }) = cpu.drain_events().into_iter().next()
+        {
+            bail!("Z180 TRAP at cycle {cycle}, PC={pc:04x}: opcode={opcode:02x?}, len={len}");
+        }
+        if step_cycles == 0 {
             writeln!(output, "unimplemented opcode at PC={pc:04x}: {opcode:02x}")?;
             return Ok(());
         }
@@ -113,9 +123,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn undefined_opcode_traps_without_unimplemented_output() {
+    fn undefined_opcode_trap_is_an_error() {
         let mut output = Vec::new();
-        run_program(&[0xdd], &mut output).expect("undefined opcode trap is a clean outcome");
+        let error = run_program(&[0xdd], &mut output).expect_err("undefined opcode must fail");
+
+        assert_eq!(
+            error.to_string(),
+            "Z180 TRAP at cycle 0, PC=0100: opcode=[dd, 00, 00], len=2"
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn clean_warm_boot_is_success() {
+        let mut output = Vec::new();
+
+        run_program(&[0xc3, 0x00, 0x00], &mut output).expect("JP 0000h is a clean warm boot");
+
         assert!(output.is_empty());
     }
 

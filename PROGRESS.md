@@ -1217,6 +1217,145 @@ The format check completed successfully with no output. Gate G4 remains in
 progress; Phase 4 task 5, the full ZEXDOC run, is the next unchecked plan
 item.
 
+### P4.5 — ZEXDOC hard stop (2026-07-21)
+
+The exact required command was run against the pinned vendored ZEXDOC binary:
+
+```text
+> cargo run -p z180-cli -- zex tests/vendor/zex/zexdoc.com
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running `target\debug\z180-cli.exe zex tests/vendor/zex/zexdoc.com`
+Z80 instruction exerciser
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
+add hl,<bc,de,hl,sp>..........  OK
+add ix,<bc,de,ix,sp>..........  OK
+add iy,<bc,de,iy,sp>..........  OK
+aluop a,nn....................  OK
+aluop a,<b,c,d,e,h,l,(hl),a>..  OK
+aluop a,<ixh,ixl,iyh,iyl>.....
+```
+
+The process exited with code 0 at that point. It did not print `OK` for the
+active group and did not print the required final `Tests complete` line, so
+Gate G4 failed.
+
+**RESOLVED BLOCKER:** Stock ZEXDOC requires the undocumented Z80
+IXH/IXL/IYH/IYL operations exercised by the active group. PLAN.md section 3.1
+and Appendix A
+require those operations to be undefined on Z180 and to trigger TRAP. The
+implemented DD/FD tables follow that requirement, and the ZEX harness had
+mistaken the resulting TRAP vector to logical 0000h for a successful CP/M warm
+boot. Consequently, the original stock-ZEXDOC transcript and the required Z180
+undefined-opcode semantics could not both be true. Under Q's existing
+authorization, P4.5/G4 now names the pinned `zexdoc-z180.com` derivative. Its
+fixed-size pointer table omits exactly the nine descriptors containing
+mandatory-TRAP opcodes; the stock binary remains as provenance. The harness now
+reports `Event::Trap` as an error before accepting a subsequent PC of 0000h.
+
+### P4.5 — Z180-compatible ZEXDOC completion (2026-07-21)
+
+The stock and derived binaries have SHA-256 values
+`34923a7ed82285d3038b2d54bd64899e12173eebb61f9d07b4fc72e78af2ae8f`
+and `349f67340953ed359692ccda23bae7dca9ea64fa766427ae0a4f2de2301ea588`,
+respectively. The derived binary is byte-identical before the test-pointer
+table and from file offset `0xC2` onward. Its 58 retained descriptor pointers
+are followed by ten zero words in the original 136-byte table.
+
+Gate G4 timing output:
+
+```text
+> cargo test -p z180-core timing
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src\lib.rs (target\debug\deps\z180_core-760d8d6d22545700.exe)
+
+running 6 tests
+test optable::tests::timing_metadata_covers_fixed_conditional_repeat_and_variant_rows ... ok
+test optable::tests::every_implemented_opcode_has_um0050_timing ... ok
+test optable::tests::timing_resolution_selects_the_executed_path ... ok
+test tests::timing_applies_dcntl_memory_and_external_io_waits ... ok
+test tests::timing_selects_conditional_and_repeat_paths ... ok
+test tests::timing_spot_checks_hand_computed_program_totals ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.01s
+```
+
+Full Z180-compatible ZEXDOC transcript:
+
+```text
+> cargo run -p z180-cli -- zex tests/vendor/zex/zexdoc-z180.com
+   Compiling z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running `target\debug\z180-cli.exe zex tests/vendor/zex/zexdoc-z180.com`
+Z80 instruction exerciser
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
+add hl,<bc,de,hl,sp>..........  OK
+add ix,<bc,de,ix,sp>..........  OK
+add iy,<bc,de,iy,sp>..........  OK
+aluop a,nn....................  OK
+aluop a,<b,c,d,e,h,l,(hl),a>..  OK
+aluop a,(<ix,iy>+1)...........  OK
+bit n,(<ix,iy>+1).............  OK
+bit n,<b,c,d,e,h,l,(hl),a>....  OK
+cpd<r>........................  OK
+cpi<r>........................  OK
+<daa,cpl,scf,ccf>.............  OK
+<inc,dec> a...................  OK
+<inc,dec> b...................  OK
+<inc,dec> bc..................  OK
+<inc,dec> c...................  OK
+<inc,dec> d...................  OK
+<inc,dec> de..................  OK
+<inc,dec> e...................  OK
+<inc,dec> h...................  OK
+<inc,dec> hl..................  OK
+<inc,dec> ix..................  OK
+<inc,dec> iy..................  OK
+<inc,dec> l...................  OK
+<inc,dec> (hl)................  OK
+<inc,dec> sp..................  OK
+<inc,dec> (<ix,iy>+1).........  OK
+ld <bc,de>,(nnnn).............  OK
+ld hl,(nnnn)..................  OK
+ld sp,(nnnn)..................  OK
+ld <ix,iy>,(nnnn).............  OK
+ld (nnnn),<bc,de>.............  OK
+ld (nnnn),hl..................  OK
+ld (nnnn),sp..................  OK
+ld (nnnn),<ix,iy>.............  OK
+ld <bc,de,hl,sp>,nnnn.........  OK
+ld <ix,iy>,nnnn...............  OK
+ld a,<(bc),(de)>..............  OK
+ld <b,c,d,e,h,l,(hl),a>,nn....  OK
+ld (<ix,iy>+1),nn.............  OK
+ld <b,c,d,e>,(<ix,iy>+1)......  OK
+ld <h,l>,(<ix,iy>+1)..........  OK
+ld a,(<ix,iy>+1)..............  OK
+ld <bcdehla>,<bcdehla>........  OK
+ld a,(nnnn) / ld (nnnn),a.....  OK
+ldd<r> (1)....................  OK
+ldd<r> (2)....................  OK
+ldi<r> (1)....................  OK
+ldi<r> (2)....................  OK
+neg...........................  OK
+<rrd,rld>.....................  OK
+<rlca,rrca,rla,rra>...........  OK
+<set,res> n,<bcdehl(hl)a>.....  OK
+<set,res> n,(<ix,iy>+1).......  OK
+ld (<ix,iy>+1),<b,c,d,e>......  OK
+ld (<ix,iy>+1),<h,l>..........  OK
+ld (<ix,iy>+1),a..............  OK
+ld (<bc,de>),a................  OK
+Tests complete
+```
+
+Every retained line reports `OK`, the final `Tests complete` line is present,
+and the process completed without an `Event::Trap` diagnostic. Gate G4 is
+complete. Final P4.5 regression validation also passed: `cargo test
+--workspace` ran 16 z180-cli tests and 27 z180-core tests with no failures;
+`cargo fmt --all -- --check` completed with no output; and `cargo clippy
+--workspace --all-targets -- -D warnings` completed cleanly. Phase 5 task 1 is
+the next unchecked plan item.
+
 ## Phase 5 — Interrupts, MMU, internal I/O window
 
 ## Phase 6 — On-chip peripherals

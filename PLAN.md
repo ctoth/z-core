@@ -716,13 +716,24 @@ Tasks:
 4. Timing spot-check tests: hand-computed total cycles for ≥ 20 short
    straight-line programs (covering branches taken/untaken, block ops, EX,
    MLT) asserted via `cycle_count()`.
-5. Run ZEXDOC to completion under `z180-cli zex`.
+5. Run the pinned Z180-compatible ZEXDOC derivative
+   `tests/vendor/zex/zexdoc-z180.com` to completion under `z180-cli zex`.
+   It retains the stock pinned ZEXDOC binary and test descriptors unchanged,
+   but its test-pointer table omits exactly the descriptor families that
+   execute UM0050-undefined opcodes: `alu8rx`, `incxh`, `incxl`, `incyh`,
+   `incyl`, `ld8ixy`, `ld8rrx`, `rotxy`, and `rotz80`. The first seven
+   exercise IXH/IXL/IYH/IYL; the last two include SLL while sweeping the
+   shift/rotate opcode group. Record the source commit, transformation, both
+   hashes, and retained stock artifact in `tests/vendor/zex/NOTICES.md`.
 
 **GATE G4:** paste (a) `cargo test -p z180-core timing` green; (b) full
-ZEXDOC console transcript showing every test line reporting OK and the
-final "Tests complete" line. Any ZEXDOC failure is a hard stop — fix before
-proceeding. (ZEXDOC exercises documented flags only; XF/YF-sensitive CRC
-mismatches should not occur — if one does, investigate rather than mask.)
+`zexdoc-z180.com` console transcript showing every retained test line
+reporting OK and the final "Tests complete" line. The harness must fail with
+an explicit diagnostic if the test program triggers `Event::Trap`; logical
+PC 0000h alone is not proof of a clean CP/M warm boot. Any retained ZEXDOC
+failure or TRAP is a hard stop — fix before proceeding. (ZEXDOC exercises
+documented flags only; XF/YF-sensitive CRC mismatches should not occur — if
+one does, investigate rather than mask.)
 
 ### Phase 5 — Interrupts, MMU, internal I/O window
 
@@ -932,7 +943,7 @@ at each gate.
 |---|---|---|---|
 | UM0050 (Z80180/Z8S180/Z8L180 MPU User Manual) | zilog.com literature search | docs/vendor/ | Record revision + URL in verification-log.md |
 | SingleStepTests Z80 JSON | github.com/SingleStepTests/z80 | tests/sst (submodule) | Pin commit hash |
-| zexdoc.com | ask Q if no trustworthy mirror; commonly redistributed with Z80 emulator projects | tests/vendor/zex/ | GPL notice in NOTICES.md; executed, never linked |
+| zexdoc.com + zexdoc-z180.com | pinned ZEXDOC source; retain stock binary and derive the Z180 test-pointer table exactly as P4.5 specifies | tests/vendor/zex/ | GPL notice and both hashes in NOTICES.md; executed, never linked |
 | BNS ROMs | C:\Users\Q\code\qns\roms\ | not copied here | used only via qns in Phase 8 |
 | Independent reference model | verified UM0050 facts | tools/reference/ | first-party specification code; never imports z-core or emulator code |
 | Optional incumbent comparison | qns's built `_z180_cffi` extension | not copied here | non-gating; black box only and only when a complete state API exists |
