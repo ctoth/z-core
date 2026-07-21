@@ -124,6 +124,33 @@ The reference source imports neither z-core nor an incumbent emulator. All
 instruction, flag, TRAP, ITC, and MMU constants cite verified manufacturer
 facts in `docs/verification-log.md`.
 
+### P1.5b — Reference self-consistency and schema (2026-07-20)
+
+```text
+> uv run --project tools/reference pytest tools/reference
+============================= test session starts =============================
+platform win32 -- Python 3.13.5, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\Q\code\z-core\tools\reference
+configfile: pyproject.toml
+plugins: hypothesis-6.157.2
+collected 3 items
+
+tools\reference\test_reference.py ...                                    [100%]
+
+============================= 3 passed in 20.55s ==============================
+```
+
+The second exact command completed with exit code 0 and no stdout/stderr:
+
+```text
+> uv run --project tools/reference python tools/reference/generate.py --check tests/z180-sst
+```
+
+The tests apply identical reference transitions twice for 1,000 Hypothesis
+examples, validate every checked-in case and count, and generate two complete
+temporary corpora whose relative trees and bytes must match. `--check` performs
+the same validation and byte comparison against the checked-in corpus.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
