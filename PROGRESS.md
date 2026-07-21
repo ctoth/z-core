@@ -290,6 +290,218 @@ The format check completed successfully with no output. Unit regressions cover
 generated instruction/MMU schema dispatch, all-page MMU validation, scripted
 read/write ordering, first-difference reporting, and per-case flag masks.
 
+### BLOCKED: Gate G1 remote CI has not run (2026-07-20)
+
+The exact normal SST gate produced:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 00,76,40..7f
+PASS 00: pass=1000 fail=0 unimplemented=0
+PASS 40: pass=1000 fail=0 unimplemented=0
+PASS 41: pass=1000 fail=0 unimplemented=0
+PASS 42: pass=1000 fail=0 unimplemented=0
+PASS 43: pass=1000 fail=0 unimplemented=0
+PASS 44: pass=1000 fail=0 unimplemented=0
+PASS 45: pass=1000 fail=0 unimplemented=0
+PASS 46: pass=1000 fail=0 unimplemented=0
+PASS 47: pass=1000 fail=0 unimplemented=0
+PASS 48: pass=1000 fail=0 unimplemented=0
+PASS 49: pass=1000 fail=0 unimplemented=0
+PASS 4a: pass=1000 fail=0 unimplemented=0
+PASS 4b: pass=1000 fail=0 unimplemented=0
+PASS 4c: pass=1000 fail=0 unimplemented=0
+PASS 4d: pass=1000 fail=0 unimplemented=0
+PASS 4e: pass=1000 fail=0 unimplemented=0
+PASS 4f: pass=1000 fail=0 unimplemented=0
+PASS 50: pass=1000 fail=0 unimplemented=0
+PASS 51: pass=1000 fail=0 unimplemented=0
+PASS 52: pass=1000 fail=0 unimplemented=0
+PASS 53: pass=1000 fail=0 unimplemented=0
+PASS 54: pass=1000 fail=0 unimplemented=0
+PASS 55: pass=1000 fail=0 unimplemented=0
+PASS 56: pass=1000 fail=0 unimplemented=0
+PASS 57: pass=1000 fail=0 unimplemented=0
+PASS 58: pass=1000 fail=0 unimplemented=0
+PASS 59: pass=1000 fail=0 unimplemented=0
+PASS 5a: pass=1000 fail=0 unimplemented=0
+PASS 5b: pass=1000 fail=0 unimplemented=0
+PASS 5c: pass=1000 fail=0 unimplemented=0
+PASS 5d: pass=1000 fail=0 unimplemented=0
+PASS 5e: pass=1000 fail=0 unimplemented=0
+PASS 5f: pass=1000 fail=0 unimplemented=0
+PASS 60: pass=1000 fail=0 unimplemented=0
+PASS 61: pass=1000 fail=0 unimplemented=0
+PASS 62: pass=1000 fail=0 unimplemented=0
+PASS 63: pass=1000 fail=0 unimplemented=0
+PASS 64: pass=1000 fail=0 unimplemented=0
+PASS 65: pass=1000 fail=0 unimplemented=0
+PASS 66: pass=1000 fail=0 unimplemented=0
+PASS 67: pass=1000 fail=0 unimplemented=0
+PASS 68: pass=1000 fail=0 unimplemented=0
+PASS 69: pass=1000 fail=0 unimplemented=0
+PASS 6a: pass=1000 fail=0 unimplemented=0
+PASS 6b: pass=1000 fail=0 unimplemented=0
+PASS 6c: pass=1000 fail=0 unimplemented=0
+PASS 6d: pass=1000 fail=0 unimplemented=0
+PASS 6e: pass=1000 fail=0 unimplemented=0
+PASS 6f: pass=1000 fail=0 unimplemented=0
+PASS 70: pass=1000 fail=0 unimplemented=0
+PASS 71: pass=1000 fail=0 unimplemented=0
+PASS 72: pass=1000 fail=0 unimplemented=0
+PASS 73: pass=1000 fail=0 unimplemented=0
+PASS 74: pass=1000 fail=0 unimplemented=0
+PASS 75: pass=1000 fail=0 unimplemented=0
+PASS 76: pass=1000 fail=0 unimplemented=0
+PASS 77: pass=1000 fail=0 unimplemented=0
+PASS 78: pass=1000 fail=0 unimplemented=0
+PASS 79: pass=1000 fail=0 unimplemented=0
+PASS 7a: pass=1000 fail=0 unimplemented=0
+PASS 7b: pass=1000 fail=0 unimplemented=0
+PASS 7c: pass=1000 fail=0 unimplemented=0
+PASS 7d: pass=1000 fail=0 unimplemented=0
+PASS 7e: pass=1000 fail=0 unimplemented=0
+PASS 7f: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=65000 fail=0 unimplemented=0 excluded=0
+```
+
+The exact negative control exited 1, reported failures on every non-identity
+LD family, and retained passes only where reversing operands is behaviorally
+unchanged. It emitted 55,869 lines because each mismatch is printed; the
+first failure and complete aggregate were:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 00,76,40..7f --sabotage-ld
+PASS 00: pass=1000 fail=0 unimplemented=0
+PASS 40: pass=1000 fail=0 unimplemented=0
+FAIL 41: pass=9 fail=991 unimplemented=0
+  41 0000: b expected=65 actual=97
+...
+PASS 7f: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=9201 fail=55799 unimplemented=0 excluded=0
+Error: 55799 single-step test(s) failed
+error: process didn't exit successfully: `target\debug\z180-cli.exe sst --dir tests/sst/v1 --only 00,76,40..7f --sabotage-ld` (exit code: 1)
+```
+
+The generated Z180 corpus gate produced:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst --census
+UNIMPLEMENTED ed00: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed01: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed04: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed08: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed09: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed0c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed10: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed11: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed14: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed18: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed19: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed1c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed20: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed21: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed24: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed28: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed29: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed2c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed30: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed34: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed38: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed39: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed3c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed4c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed5c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed64: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed6c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed74: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed76: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed7c: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed83: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed8b: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed93: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED ed9b: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED mmu: pass=0 fail=0 unimplemented=200
+UNIMPLEMENTED trap: pass=0 fail=0 unimplemented=50
+CENSUS ed00=200
+CENSUS ed01=200
+CENSUS ed04=200
+CENSUS ed08=200
+CENSUS ed09=200
+CENSUS ed0c=200
+CENSUS ed10=200
+CENSUS ed11=200
+CENSUS ed14=200
+CENSUS ed18=200
+CENSUS ed19=200
+CENSUS ed1c=200
+CENSUS ed20=200
+CENSUS ed21=200
+CENSUS ed24=200
+CENSUS ed28=200
+CENSUS ed29=200
+CENSUS ed2c=200
+CENSUS ed30=200
+CENSUS ed34=200
+CENSUS ed38=200
+CENSUS ed39=200
+CENSUS ed3c=200
+CENSUS ed4c=200
+CENSUS ed5c=200
+CENSUS ed64=200
+CENSUS ed6c=200
+CENSUS ed74=200
+CENSUS ed76=200
+CENSUS ed7c=200
+CENSUS ed83=200
+CENSUS ed8b=200
+CENSUS ed93=200
+CENSUS ed9b=200
+CENSUS mmu=200
+CENSUS trap=50
+CENSUS total=7050
+SUMMARY pass=0 fail=0 unimplemented=7050 excluded=0
+```
+
+The ZEX harness gate produced:
+
+```text
+> cargo run -p z180-cli -- zex tests/vendor/zex/zexdoc.com
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `target\debug\z180-cli.exe zex tests/vendor/zex/zexdoc.com`
+unimplemented opcode at PC=0100: c3
+```
+
+The CI checkout now explicitly requests submodules. The pinned checkout and
+the workflow's exact commands were:
+
+```text
+> git submodule status
+ ebe1875d48f374bcfd4b505d8eb8ee751568b5f7 tests/sst (v1.0-beta.2)
+
+> cargo fmt --check
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+
+> cargo test --workspace
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored
+running 8 tests
+test result: ok. 8 passed; 0 failed; 0 ignored
+Doc-tests z180_core: 0 passed; 0 failed
+```
+
+The four executable local requirements and the exact local CI command set are
+green. The named artifact `CI green on the submodule checkout` is not yet
+available: the workflow correction and G1 record are local and unpushed, so no
+GitHub Actions run can include them. A local command sequence is not a
+substitute for an actual green CI run.
+
+Required from Q: authorize pushing the committed branch so GitHub Actions can
+run, or explicitly revise G1 to accept the pasted local workflow-equivalent
+authority. Phase 2 has not started, and no CPU behavior beyond the authorized
+stub subset was added.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP

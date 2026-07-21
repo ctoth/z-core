@@ -16,6 +16,8 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - name: Check formatting
