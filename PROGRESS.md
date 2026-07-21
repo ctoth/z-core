@@ -1358,6 +1358,85 @@ the next unchecked plan item.
 
 ## Phase 5 — Interrupts, MMU, internal I/O window
 
+### P5.1 — Internal I/O register file and dispatch (2026-07-21)
+
+`ioregs.rs` is the single 64-entry source of truth for internal-register reset
+values, read masks, write masks, Z80180/Z8S180 availability, and side-effect
+selectors. `Z180` owns one register file; the former standalone DCNTL and ITC
+fields have been removed. The public side-effect-free `io_reg_peek` view is
+now implemented.
+
+All existing instruction forms continue through the existing `read_io` and
+`write_io` path. That path now applies ICR relocation, requires a zero high
+byte for internal decode, duplicates every internal cycle on `HostBus`, ignores
+duplicate external read data, and excludes internal cycles from DCNTL's
+external-I/O waits. Waits are accumulated when each access occurs so a DCNTL
+write cannot retroactively alter its own opcode/operand fetches.
+
+The plan's register mnemonic at 0Bh was corrected from `TRDR` to UM0050's
+`TRD`; its Phase 5 MMU typo `BAR` was corrected to `CBAR`; and the `HostBus`
+contract now records the manufacturer's duplicate-cycle behavior. The
+verification log records the complete map/mask/reset audit and the explicit
+deterministic choices for manufacturer-unspecified values.
+
+Focused P5.1 authority:
+
+```text
+> cargo test -p z180-core ioregs -- --nocapture
+   Compiling z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
+     Running unittests src\lib.rs (target\debug\deps\z180_core-760d8d6d22545700.exe)
+
+running 5 tests
+test tests::ioregs_decode_relocation_and_duplicate_bus_cycles_match_um0050 ... ok
+test tests::ioregs_reset_masks_and_variants_match_um0050 ... ok
+test tests::ioregs_write_masks_and_special_effects_match_um0050 ... ok
+test tests::ioregs_in0_tstio_and_otim_use_internal_data_and_duplicate_the_bus ... ok
+test tests::ioregs_internal_cycles_do_not_receive_external_io_waits ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+```
+
+The generated instruction families that exercise every P5.1-routed Z180 I/O
+form also pass through the real SST runner:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst --only ed00,ed01,ed74,ed83,ed8b,ed93,ed9b
+PASS ed00: pass=200 fail=0 unimplemented=0
+PASS ed01: pass=200 fail=0 unimplemented=0
+PASS ed74: pass=200 fail=0 unimplemented=0
+PASS ed83: pass=200 fail=0 unimplemented=0
+PASS ed8b: pass=200 fail=0 unimplemented=0
+PASS ed93: pass=200 fail=0 unimplemented=0
+PASS ed9b: pass=200 fail=0 unimplemented=0
+SUMMARY pass=1400 fail=0 unimplemented=0 excluded=0
+```
+
+Final workspace authority:
+
+```text
+> cargo test --workspace
+running 16 tests
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+running 32 tests
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s
+
+> cargo fmt --all -- --check
+```
+
+The format check completed with no output. P5.2 is the next unchecked task;
+Gate G5 remains pending until all four Phase 5 tasks are complete.
+
 ## Phase 6 — On-chip peripherals
 
 ## Phase 7 — Debug, trace, save-state, disassembler

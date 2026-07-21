@@ -5,6 +5,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+mod ioregs;
 mod memory;
 mod optable;
 mod registers;
@@ -12,6 +13,7 @@ mod registers;
 pub use memory::{ConfigError, MachineConfig, RegionDef, RegionKind, Variant};
 pub use registers::Reg;
 
+use ioregs::{DCNTL, ICR, IO_REG_SPECS, IO_REGISTER_COUNT, ITC, ReadEffect, WriteEffect};
 use memory::Memory;
 use optable::{HALT_IDLE_CYCLES, SECOND_OPCODE_TRAP_CYCLES, THIRD_OPCODE_TRAP_CYCLES};
 use registers::Registers;
@@ -25,8 +27,6 @@ const FLAG_PV: u8 = 0x04;
 const FLAG_N: u8 = 0x02;
 const FLAG_C: u8 = 0x01;
 const FLAG_XY: u8 = FLAG_X | FLAG_Y;
-const DCNTL_RESET: u8 = 0xf0;
-
 pub trait HostBus {
     fn mem_read(&mut self, phys: u32) -> u8;
     fn mem_write(&mut self, phys: u32, value: u8);
@@ -51,14 +51,13 @@ pub struct Z180<B: HostBus> {
     instruction_pc: u16,
     cycle_count: u64,
     variant: Variant,
-    dcntl: u8,
+    io_regs: [u8; IO_REGISTER_COUNT],
     timing_branch_taken: bool,
     timing_repeat_iterations: u16,
-    timing_memory_accesses: u16,
-    timing_io_accesses: u16,
+    timing_memory_waits: u32,
+    timing_io_waits: u32,
     halted: bool,
     sleeping: bool,
-    itc: u8,
     iff1: bool,
     iff2: bool,
     ei_shadow: bool,
@@ -68,6 +67,12 @@ pub struct Z180<B: HostBus> {
 
 impl<B: HostBus> Z180<B> {
     pub fn new(config: MachineConfig, bus: B) -> Result<Self, ConfigError> {
+        let mut io_regs = [0; IO_REGISTER_COUNT];
+        for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
+            if spec.is_available(config.variant) {
+                io_regs[index] = spec.reset;
+            }
+        }
         Ok(Self {
             registers: Registers::default(),
             memory: Memory::new(&config)?,
@@ -75,14 +80,13 @@ impl<B: HostBus> Z180<B> {
             instruction_pc: 0,
             cycle_count: 0,
             variant: config.variant,
-            dcntl: DCNTL_RESET,
+            io_regs,
             timing_branch_taken: false,
             timing_repeat_iterations: 0,
-            timing_memory_accesses: 0,
-            timing_io_accesses: 0,
+            timing_memory_waits: 0,
+            timing_io_waits: 0,
             halted: false,
             sleeping: false,
-            itc: 0x01,
             iff1: false,
             iff2: false,
             ei_shadow: false,
@@ -94,14 +98,19 @@ impl<B: HostBus> Z180<B> {
     pub fn reset(&mut self) {
         self.registers = Registers::default();
         self.instruction_pc = 0;
-        self.dcntl = DCNTL_RESET;
+        for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
+            self.io_regs[index] = if spec.is_available(self.variant) {
+                spec.reset
+            } else {
+                0
+            };
+        }
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
-        self.timing_memory_accesses = 0;
-        self.timing_io_accesses = 0;
+        self.timing_memory_waits = 0;
+        self.timing_io_waits = 0;
         self.halted = false;
         self.sleeping = false;
-        self.itc = 0x01;
         self.iff1 = false;
         self.iff2 = false;
         self.ei_shadow = false;
@@ -112,8 +121,8 @@ impl<B: HostBus> Z180<B> {
     pub fn step(&mut self) -> u32 {
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
-        self.timing_memory_accesses = 0;
-        self.timing_io_accesses = 0;
+        self.timing_memory_waits = 0;
+        self.timing_io_waits = 0;
 
         if let Some(cycles) = self.interrupt_check_point() {
             return self.finish_step(cycles.saturating_add(self.wait_cycles()));
@@ -245,7 +254,20 @@ impl<B: HostBus> Z180<B> {
     }
 
     pub fn itc(&self) -> u8 {
-        self.itc
+        self.io_reg_peek(ITC as u8)
+    }
+
+    pub fn io_reg_peek(&self, internal_addr: u8) -> u8 {
+        let index = usize::from(internal_addr);
+        let Some(spec) = IO_REG_SPECS.get(index).copied() else {
+            return 0;
+        };
+        if !spec.is_available(self.variant) {
+            return 0;
+        }
+        match spec.read_effect {
+            ReadEffect::None => self.io_regs[index] & spec.read_mask,
+        }
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
@@ -317,7 +339,7 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn take_trap(&mut self, opcode: [u8; 3], len: u8, stacked_pc: u16, ufo: bool, m1_fetches: u8) {
-        self.itc = (self.itc & 0x07) | 0x80 | if ufo { 0x40 } else { 0 };
+        self.io_regs[ITC] = (self.io_regs[ITC] & 0x07) | 0x80 | if ufo { 0x40 } else { 0 };
         for _ in 0..m1_fetches {
             self.registers.increment_r();
         }
@@ -1422,30 +1444,95 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn read_logical(&mut self, logical: u16) -> u8 {
-        self.timing_memory_accesses = self.timing_memory_accesses.saturating_add(1);
+        self.timing_memory_waits = self
+            .timing_memory_waits
+            .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
         self.memory.read(&mut self.bus, u32::from(logical))
     }
 
     fn write_logical(&mut self, logical: u16, value: u8) {
-        self.timing_memory_accesses = self.timing_memory_accesses.saturating_add(1);
+        self.timing_memory_waits = self
+            .timing_memory_waits
+            .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
         self.memory.write(&mut self.bus, u32::from(logical), value);
     }
 
+    fn internal_io_index(&self, port: u16) -> Option<usize> {
+        let [high, low] = port.to_be_bytes();
+        let base = self.io_regs[ICR] & 0xc0;
+        if high == 0 && low >= base && low <= base | 0x3f {
+            Some(usize::from(low - base))
+        } else {
+            None
+        }
+    }
+
     fn read_io(&mut self, port: u16) -> u8 {
-        self.timing_io_accesses = self.timing_io_accesses.saturating_add(1);
+        if let Some(index) = self.internal_io_index(port) {
+            let _ = self.bus.io_read(port);
+            return self.io_reg_peek(index as u8);
+        }
+        self.timing_io_waits = self
+            .timing_io_waits
+            .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
         self.bus.io_read(port)
     }
 
     fn write_io(&mut self, port: u16, value: u8) {
-        self.timing_io_accesses = self.timing_io_accesses.saturating_add(1);
+        if let Some(index) = self.internal_io_index(port) {
+            self.bus.io_write(port, value);
+            self.write_internal_io(index, value);
+            return;
+        }
+        self.timing_io_waits = self
+            .timing_io_waits
+            .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
         self.bus.io_write(port, value);
     }
 
+    fn write_internal_io(&mut self, index: usize, value: u8) {
+        let spec = IO_REG_SPECS[index];
+        if !spec.is_available(self.variant) {
+            return;
+        }
+        let old = self.io_regs[index];
+        self.io_regs[index] = match spec.write_effect {
+            WriteEffect::None => (old & !spec.write_mask) | (value & spec.write_mask),
+            WriteEffect::Rdr => {
+                let status_index = if index == 0x08 { 0x04 } else { 0x05 };
+                if self.variant == Variant::Z8S180 && self.io_regs[status_index] & 0x80 != 0 {
+                    old
+                } else {
+                    (old & !spec.write_mask) | (value & spec.write_mask)
+                }
+            }
+            WriteEffect::Dstat => {
+                let mut next = old & 0xc9;
+                if value & 0x20 == 0 {
+                    next = (next & !0x80) | (value & 0x80);
+                    if value & 0x80 != 0 {
+                        next |= 0x01;
+                    }
+                }
+                if value & 0x10 == 0 {
+                    next = (next & !0x40) | (value & 0x40);
+                    if value & 0x40 != 0 {
+                        next |= 0x01;
+                    }
+                }
+                (next & !0x0c) | (value & 0x0c) | 0x30
+            }
+            WriteEffect::Itc => {
+                let trap = old & value & 0x80;
+                let ufo = old & 0x40;
+                trap | ufo | (value & 0x07)
+            }
+        };
+    }
+
     fn wait_cycles(&self) -> u32 {
-        let memory_waits = u32::from((self.dcntl >> 6) & 0x03);
-        let io_waits = u32::from(((self.dcntl >> 4) & 0x03) + 1);
-        u32::from(self.timing_memory_accesses) * memory_waits
-            + u32::from(self.timing_io_accesses) * io_waits
+        self.timing_memory_waits
+            .saturating_add(self.timing_io_waits)
     }
 
     fn finish_step(&mut self, cycles: u32) -> u32 {
@@ -1477,6 +1564,30 @@ mod tests {
         fn io_write(&mut self, _port: u16, _value: u8) {}
     }
 
+    #[derive(Default)]
+    struct RecordingBus {
+        io_read_value: u8,
+        io_reads: Vec<u16>,
+        io_writes: Vec<(u16, u8)>,
+    }
+
+    impl HostBus for RecordingBus {
+        fn mem_read(&mut self, _phys: u32) -> u8 {
+            0xff
+        }
+
+        fn mem_write(&mut self, _phys: u32, _value: u8) {}
+
+        fn io_read(&mut self, port: u16) -> u8 {
+            self.io_reads.push(port);
+            self.io_read_value
+        }
+
+        fn io_write(&mut self, port: u16, value: u8) {
+            self.io_writes.push((port, value));
+        }
+    }
+
     fn machine() -> Z180<NullBus> {
         let config = MachineConfig {
             regions: vec![RegionDef {
@@ -1487,6 +1598,193 @@ mod tests {
             ..MachineConfig::default()
         };
         Z180::new(config, NullBus).expect("flat RAM configuration must be valid")
+    }
+
+    fn recording_machine(variant: Variant) -> Z180<RecordingBus> {
+        let config = MachineConfig {
+            variant,
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1_0000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        Z180::new(config, RecordingBus::default())
+            .expect("flat recording configuration must be valid")
+    }
+
+    #[test]
+    fn ioregs_reset_masks_and_variants_match_um0050() {
+        let mut baseline = machine();
+        assert_eq!(baseline.io_reg_peek(0x00), 0x10, "CNTLA0");
+        assert_eq!(baseline.io_reg_peek(0x02), 0x07, "CNTLB0");
+        assert_eq!(baseline.io_reg_peek(0x04), 0x02, "STAT0 TDRE");
+        assert_eq!(baseline.io_reg_peek(0x0e), 0xff, "RLDR0L");
+        assert_eq!(baseline.io_reg_peek(0x18), 0xff, "FRC");
+        assert_eq!(baseline.io_reg_peek(0x30), 0x30, "DSTAT");
+        assert_eq!(baseline.io_reg_peek(0x32), 0xf0, "DCNTL");
+        assert_eq!(baseline.io_reg_peek(0x34), 0x01, "ITC");
+        assert_eq!(baseline.io_reg_peek(0x36), 0xc0, "RCR");
+        assert_eq!(baseline.io_reg_peek(0x3a), 0xf0, "CBAR");
+        assert_eq!(baseline.io_reg_peek(0x3e), 0xa0, "OMCR read mask");
+        assert_eq!(baseline.io_regs[0x3e], 0xe0, "OMCR raw reset");
+        assert_eq!(baseline.io_reg_peek(0x3f), 0x00, "ICR");
+        assert_eq!(baseline.io_reg_peek(0x12), 0x00, "S180 register reserved");
+        assert_eq!(baseline.io_reg_peek(0x80), 0x00, "out of range");
+
+        baseline.io_regs.fill(0x5a);
+        baseline.reset();
+        assert_eq!(baseline.io_reg_peek(0x32), 0xf0);
+        assert_eq!(baseline.io_reg_peek(0x34), 0x01);
+        assert_eq!(baseline.io_reg_peek(0x3a), 0xf0);
+        assert_eq!(baseline.io_reg_peek(0x12), 0x00);
+
+        let s180 = recording_machine(Variant::Z8S180);
+        assert_eq!(s180.io_reg_peek(0x12), 0x00, "ASEXT0");
+        assert_eq!(s180.io_reg_peek(0x1e), 0x7f, "CMR fixed bits");
+        assert_eq!(s180.io_reg_peek(0x1f), 0x00, "CCR");
+        assert_eq!(s180.io_reg_peek(0x2d), 0x00, "IAR1B");
+    }
+
+    #[test]
+    fn ioregs_write_masks_and_special_effects_match_um0050() {
+        let mut cpu = machine();
+        cpu.write_internal_io(0x33, 0xff);
+        assert_eq!(cpu.io_reg_peek(0x33), 0xe0, "IL low bits are not stored");
+
+        cpu.write_internal_io(0x3e, 0xff);
+        assert_eq!(cpu.io_regs[0x3e], 0xe0, "OMCR stores writable bits");
+        assert_eq!(cpu.io_reg_peek(0x3e), 0xa0, "OMCR M1TE is write-only");
+
+        cpu.write_internal_io(ITC, 0xff);
+        assert_eq!(cpu.io_reg_peek(ITC as u8), 0x07, "software cannot set TRAP");
+        cpu.io_regs[ITC] = 0xc1;
+        cpu.write_internal_io(ITC, 0x87);
+        assert_eq!(cpu.io_reg_peek(ITC as u8), 0xc7, "UFO is read-only");
+        cpu.write_internal_io(ITC, 0x00);
+        assert_eq!(cpu.io_reg_peek(ITC as u8), 0x40, "zero clears TRAP");
+
+        cpu.write_internal_io(0x30, 0xff);
+        assert_eq!(cpu.io_reg_peek(0x30), 0x3c, "DWE high blocks DE writes");
+        cpu.write_internal_io(0x30, 0xcf);
+        assert_eq!(cpu.io_reg_peek(0x30), 0xfd, "DWE low enables DE writes");
+        cpu.write_internal_io(0x30, 0x20);
+        assert_eq!(
+            cpu.io_reg_peek(0x30),
+            0xb1,
+            "DE0 clears without clearing DME"
+        );
+
+        let mut s180 = recording_machine(Variant::Z8S180);
+        s180.write_internal_io(0x08, 0xa5);
+        assert_eq!(s180.io_reg_peek(0x08), 0xa5);
+        s180.io_regs[0x04] |= 0x80;
+        s180.write_internal_io(0x08, 0x5a);
+        assert_eq!(s180.io_reg_peek(0x08), 0xa5, "RDRF blocks S180 RDR writes");
+    }
+
+    #[test]
+    fn ioregs_decode_relocation_and_duplicate_bus_cycles_match_um0050() {
+        let mut cpu = recording_machine(Variant::Z80180);
+        cpu.mem_poke(0, 0xed);
+        cpu.mem_poke(1, 0x01);
+        cpu.mem_poke(2, 0x3f);
+        cpu.set_reg(Reg::BC, 0x4000);
+        cpu.step();
+        assert_eq!(cpu.io_reg_peek(ICR as u8), 0x40);
+        assert_eq!(cpu.bus.io_writes, vec![(0x003f, 0x40)]);
+
+        cpu.mem_poke(3, 0xed);
+        cpu.mem_poke(4, 0x01);
+        cpu.mem_poke(5, 0x72);
+        cpu.set_reg(Reg::BC, 0x5a00);
+        cpu.step();
+        assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0x5a);
+        assert_eq!(cpu.bus.io_writes[1], (0x0072, 0x5a));
+
+        cpu.mem_poke(6, 0xed);
+        cpu.mem_poke(7, 0x01);
+        cpu.mem_poke(8, 0x32);
+        cpu.set_reg(Reg::BC, 0xa500);
+        cpu.step();
+        assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0x5a, "old window is external");
+        assert_eq!(cpu.bus.io_writes[2], (0x0032, 0xa5));
+
+        cpu.mem_poke(9, 0xed);
+        cpu.mem_poke(10, 0x41);
+        cpu.set_reg(Reg::BC, 0xa572);
+        cpu.step();
+        assert_eq!(
+            cpu.io_reg_peek(DCNTL as u8),
+            0x5a,
+            "nonzero high byte is external"
+        );
+        assert_eq!(cpu.bus.io_writes[3], (0xa572, 0xa5));
+    }
+
+    #[test]
+    fn ioregs_in0_tstio_and_otim_use_internal_data_and_duplicate_the_bus() {
+        let mut input = recording_machine(Variant::Z80180);
+        input.bus.io_read_value = 0x55;
+        input.io_regs[DCNTL] = 0xa5;
+        input.mem_poke(0, 0xed);
+        input.mem_poke(1, 0x00);
+        input.mem_poke(2, 0x32);
+        input.step();
+        assert_eq!(input.reg(Reg::BC).to_be_bytes()[0], 0xa5);
+        assert_eq!(input.bus.io_reads, vec![0x0032]);
+
+        let mut tstio = recording_machine(Variant::Z80180);
+        tstio.bus.io_read_value = 0xff;
+        tstio.io_regs[DCNTL] = 0x81;
+        tstio.mem_poke(0, 0xed);
+        tstio.mem_poke(1, 0x74);
+        tstio.mem_poke(2, 0x80);
+        tstio.set_reg(Reg::BC, 0x0032);
+        tstio.step();
+        assert_eq!(
+            tstio.reg(Reg::AF).to_be_bytes()[1] & (FLAG_S | FLAG_Z),
+            FLAG_S
+        );
+        assert_eq!(tstio.bus.io_reads, vec![0x0032]);
+
+        let mut otim = recording_machine(Variant::Z80180);
+        otim.mem_poke(0, 0xed);
+        otim.mem_poke(1, 0x83);
+        otim.mem_poke(0x2000, 0x60);
+        otim.set_reg(Reg::BC, 0x0132);
+        otim.set_reg(Reg::HL, 0x2000);
+        assert_eq!(otim.step(), 23, "internal OTIM has no external-I/O waits");
+        assert_eq!(otim.io_reg_peek(DCNTL as u8), 0x60);
+        assert_eq!(otim.bus.io_writes, vec![(0x0032, 0x60)]);
+    }
+
+    #[test]
+    fn ioregs_internal_cycles_do_not_receive_external_io_waits() {
+        let mut internal_in = recording_machine(Variant::Z80180);
+        internal_in.mem_poke(0, 0xed);
+        internal_in.mem_poke(1, 0x00);
+        internal_in.mem_poke(2, 0x33);
+        assert_eq!(internal_in.step(), 21);
+
+        let mut external_in = recording_machine(Variant::Z80180);
+        external_in.mem_poke(0, 0xed);
+        external_in.mem_poke(1, 0x00);
+        external_in.mem_poke(2, 0x40);
+        assert_eq!(external_in.step(), 25);
+
+        let mut internal_out = recording_machine(Variant::Z80180);
+        internal_out.mem_poke(0, 0xed);
+        internal_out.mem_poke(1, 0x01);
+        internal_out.mem_poke(2, 0x33);
+        assert_eq!(internal_out.step(), 22);
+
+        let mut external_out = recording_machine(Variant::Z80180);
+        external_out.mem_poke(0, 0xed);
+        external_out.mem_poke(1, 0x01);
+        external_out.mem_poke(2, 0x40);
+        assert_eq!(external_out.step(), 26);
     }
 
     #[test]
@@ -1828,18 +2126,18 @@ mod tests {
 
     #[test]
     fn z180_repeat_block_output_sets_terminal_flags() {
-        let cases: [(u8, u16, u16, u16, u8); 2] = [
-            (0x93, 0x2000, 0x2001, 0x2002, 0x12),
-            (0x9b, 0x2001, 0x2000, 0x1fff, 0x0e),
+        let cases: [(u8, u16, u16, u16, u8, u8); 2] = [
+            (0x93, 0x2000, 0x2001, 0x2002, 0x40, 0x42),
+            (0x9b, 0x2001, 0x2000, 0x1fff, 0x42, 0x40),
         ];
-        for (opcode, initial_hl, final_value_address, final_hl, final_c) in cases {
+        for (opcode, initial_hl, final_value_address, final_hl, initial_c, final_c) in cases {
             let mut cpu = machine();
             cpu.mem_poke(0, 0xed);
             cpu.mem_poke(1, opcode);
             cpu.mem_poke(initial_hl.into(), 0x01);
             cpu.mem_poke(final_value_address.into(), 0x80);
             cpu.set_reg(Reg::AF, 0x55ff);
-            cpu.set_reg(Reg::BC, 0x0210);
+            cpu.set_reg(Reg::BC, u16::from_be_bytes([2, initial_c]));
             cpu.set_reg(Reg::HL, initial_hl);
 
             assert_eq!(cpu.step(), 50, "ED {opcode:02x}");
@@ -2214,7 +2512,7 @@ mod tests {
             cpu.mem_poke(0, 0xed);
             cpu.mem_poke(1, 0x83);
             cpu.mem_poke(0x2000, 0x5a);
-            cpu.set_reg(Reg::BC, 0x0110);
+            cpu.set_reg(Reg::BC, 0x0140);
             cpu.set_reg(Reg::HL, 0x2000);
             cpu.step();
             assert_eq!(cpu.cycle_count(), 27, "OTIM");
@@ -2228,7 +2526,7 @@ mod tests {
             cpu.mem_poke(1, 0x93);
             cpu.mem_poke(0x2000, 0x5a);
             cpu.mem_poke(0x2001, 0xa5);
-            cpu.set_reg(Reg::BC, 0x0210);
+            cpu.set_reg(Reg::BC, 0x0240);
             cpu.set_reg(Reg::HL, 0x2000);
             cpu.step();
             assert_eq!(cpu.cycle_count(), 50, "OTIMR B=2");
@@ -2263,15 +2561,15 @@ mod tests {
     fn timing_applies_dcntl_memory_and_external_io_waits() {
         let mut reset_nop = machine();
         reset_nop.mem_poke(0, 0x00);
-        assert_eq!(reset_nop.dcntl, 0xf0);
+        assert_eq!(reset_nop.io_reg_peek(DCNTL as u8), 0xf0);
         assert_eq!(reset_nop.step(), 6);
 
         let mut minimum_nop = machine();
-        minimum_nop.dcntl = 0x00;
+        minimum_nop.io_regs[DCNTL] = 0x00;
         minimum_nop.mem_poke(0, 0x00);
         assert_eq!(minimum_nop.step(), 3);
         minimum_nop.reset();
-        assert_eq!(minimum_nop.dcntl, 0xf0);
+        assert_eq!(minimum_nop.io_reg_peek(DCNTL as u8), 0xf0);
 
         let mut reset_in = machine();
         reset_in.mem_poke(0, 0xdb);
@@ -2279,7 +2577,7 @@ mod tests {
         assert_eq!(reset_in.step(), 19);
 
         let mut programmed_in = machine();
-        programmed_in.dcntl = 0x50;
+        programmed_in.io_regs[DCNTL] = 0x50;
         programmed_in.mem_poke(0, 0xdb);
         programmed_in.mem_poke(1, 0x40);
         assert_eq!(programmed_in.step(), 13);

@@ -203,8 +203,8 @@ pub enum RegionKind {
 pub trait HostBus {
     fn mem_read(&mut self, phys: u32) -> u8;         // External regions only
     fn mem_write(&mut self, phys: u32, val: u8);
-    fn io_read(&mut self, port: u16) -> u8;          // ports NOT claimed by on-chip I/O
-    fn io_write(&mut self, port: u16, val: u8);
+    fn io_read(&mut self, port: u16) -> u8;          // external + duplicate internal-I/O cycles
+    fn io_write(&mut self, port: u16, val: u8);      // external + duplicate internal-I/O cycles
 }
 ```
 
@@ -281,7 +281,8 @@ pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError>;
 
 Design rule for the hot path: `step()` reads instruction bytes via an inlined
 page-table lookup; no trait-object dispatch for Ram/Rom pages; `HostBus` is
-only reached for `External` pages and unclaimed I/O ports. Events are pushed
+only reached for `External` pages, external I/O ports, and UM-required
+duplicate external cycles for internal I/O. Events are pushed
 to a preallocated ring, never allocated per event after warm-up.
 
 ### 2.3 Single source of truth for the instruction set
@@ -399,7 +400,7 @@ table; rows marked (S) are Z8S180-only:
 ```
 0x00 CNTLA0    0x01 CNTLA1    0x02 CNTLB0    0x03 CNTLB1
 0x04 STAT0     0x05 STAT1     0x06 TDR0      0x07 TDR1
-0x08 RDR0      0x09 RDR1      0x0A CNTR      0x0B TRDR
+0x08 RDR0      0x09 RDR1      0x0A CNTR      0x0B TRD
 0x0C TMDR0L    0x0D TMDR0H    0x0E RLDR0L    0x0F RLDR0H
 0x10 TCR       0x12 ASEXT0(S) 0x13 ASEXT1(S)
 0x14 TMDR1L    0x15 TMDR1H    0x16 RLDR1L    0x17 RLDR1H
@@ -741,7 +742,7 @@ Tasks:
 1. Internal I/O register file + dispatch (3.6): `ioregs.rs` table (reset
    value, read mask, write mask, side-effect hooks), ICR relocation, IN0/
    OUT0/TSTIO/OTIM-family routing, 16-bit port decode rule per UM.
-2. MMU (3.3): translation array, CBR/BBR/BAR writes, `mmu_translate`
+2. MMU (3.3): translation array, CBR/BBR/CBAR writes, `mmu_translate`
    accessor. All instruction fetches and memory operands now translate.
    Activate the z180-sst `mmu` family by executing ordinary internal-I/O
    instructions to program CBR/BBR/CBAR, then run and compare all 16 probes

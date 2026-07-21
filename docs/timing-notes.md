@@ -19,16 +19,18 @@ opcode entries represent:
 - the Z80180/Z8S180 RETI timing difference; and
 - HALT-mode, TRAP, and interrupt-acknowledge base costs.
 
-After executing an instruction, the core selects the path that actually ran
-and adds its DCNTL waits. Each CPU memory read or write receives the programmed
-0–3 memory waits. Each external-I/O read or write receives the programmed 1–4
-I/O waits. DCNTL resets to `F0h`, so reset-state execution adds three waits per
-memory access and four waits per external-I/O access.
+As an instruction executes, each access captures the DCNTL waits programmed at
+that access: 0–3 for each CPU memory read or write and 1–4 for each external-I/O
+read or write. A DCNTL write therefore affects later accesses, not the earlier
+fetches of the instruction performing the write. DCNTL resets to `F0h`, so
+reset-state execution adds three waits per memory access and four waits per
+external-I/O access.
 
 The access count includes opcode and operand fetches, data reads and writes,
 stack accesses, TRAP accesses, and the memory read performed by each HALT-mode
-idle cycle. Internal-I/O access timing is different in UM0050 and will be
-routed separately when the Phase 5 internal-I/O register file lands.
+idle cycle. Internal-I/O cycles receive no external-I/O waits. Their required
+duplicate external bus cycles use the same internal timing and likewise ignore
+WAIT and the programmed external-I/O wait count.
 
 `step()` returns the total base-plus-wait cycles consumed by one instruction or
 one HALT-mode idle cycle. A sleeping CPU returns zero because no CPU clock
