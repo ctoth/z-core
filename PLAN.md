@@ -172,6 +172,7 @@ pub struct MachineConfig {
     pub unmapped_read: u8,    // value returned for unmapped phys reads; default 0xFF
     pub variant: Variant,     // Z80180 | Z8S180
     pub regions: Vec<RegionDef>,
+    pub event_capacity: usize, // retained event count; default 4096, zero disables storage
 }
 
 pub enum Variant { Z80180, Z8S180 }
@@ -260,6 +261,11 @@ pub enum Event {
     RomWrite { cycle: u64, pc: u16, phys: u32, val: u8 },
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WatchId(/* opaque */);
+
+pub enum WatchKind { Read, Write, Both }
+
 pub fn add_mem_watch(&mut self, base: u32, size: u32, kind: WatchKind) -> WatchId; // Read|Write|Both
 pub fn remove_mem_watch(&mut self, id: WatchId);
 pub fn set_io_trace(&mut self, enabled: bool);            // emit all Io* events
@@ -268,6 +274,8 @@ pub fn set_pc_watch(&mut self, addr: Option<u16>);        // logical address
 pub fn pc_watch_hits(&self) -> u64;
 pub fn drain_events(&mut self) -> Vec<Event>;             // ring buffer, capacity configurable,
                                                           // overflow sets a sticky `events_lost` flag
+pub fn events_lost(&self) -> bool;
+pub fn clear_events_lost(&mut self);
 
 // Instruction trace (heavier; off by default)
 pub struct TraceEntry { pub cycle: u64, pub pc: u16, pub phys_pc: u32, pub bytes: [u8;4], pub len: u8 }
@@ -278,6 +286,25 @@ pub fn drain_insn_trace(&mut self) -> Vec<TraceEntry>;
 pub fn save_state(&self) -> Vec<u8>;                      // versioned, postcard-encoded
 pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError>;
 ```
+
+The event ring retains the newest `event_capacity` entries in chronological
+order. On overflow it evicts the oldest entry and sets `events_lost`; capacity
+zero drops every emitted event and sets the same flag. `drain_events()` does
+not clear the sticky flag; only `clear_events_lost()`, `reset()`, or loading a
+state whose flag is clear does. Storage is reserved when an event producer is
+enabled or the first unconditional event is emitted, then reused across
+drains so steady-state event delivery does not allocate. A reservation failure
+drops the event and sets `events_lost` rather than panicking.
+
+Memory watches use non-wrapping physical half-open ranges
+`[base, base + size)`; size zero watches nothing. They observe CPU and DMA
+accesses but not host debugging `mem_peek`/`mem_poke` calls. I/O tracing emits
+one event per guest-visible CPU or DMA access, including an internal-I/O access
+that also performs its required duplicate external bus cycle. Setting the PC
+watch resets its hit counter; a hit is counted once at instruction entry,
+before opcode fetch, and HALT idle cycles do not add hits. Hardware `reset()`
+preserves watch/trace configuration but clears queued events, loss state, and
+the PC hit count.
 
 Design rule for the hot path: `step()` reads instruction bytes via an inlined
 page-table lookup; no trait-object dispatch for Ram/Rom pages; `HostBus` is

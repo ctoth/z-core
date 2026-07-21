@@ -34,6 +34,7 @@ pub struct MachineConfig {
     pub unmapped_read: u8,
     pub variant: Variant,
     pub regions: Vec<RegionDef>,
+    pub event_capacity: usize,
 }
 
 impl Default for MachineConfig {
@@ -44,6 +45,7 @@ impl Default for MachineConfig {
             unmapped_read: 0xff,
             variant: Variant::Z80180,
             regions: Vec::new(),
+            event_capacity: 4096,
         }
     }
 }
@@ -218,14 +220,21 @@ impl Memory {
         }
     }
 
-    pub(crate) fn write<B: HostBus>(&mut self, bus: &mut B, phys: u32, value: u8) {
+    pub(crate) fn write<B: HostBus>(&mut self, bus: &mut B, phys: u32, value: u8) -> bool {
         let Some((page, in_page)) = self.lookup(phys) else {
-            return;
+            return false;
         };
         match page {
-            Page::Ram { offset } => self.ram[offset + in_page] = value,
-            Page::External => bus.mem_write(phys, value),
-            Page::Rom { .. } | Page::Unmapped => {}
+            Page::Ram { offset } => {
+                self.ram[offset + in_page] = value;
+                false
+            }
+            Page::External => {
+                bus.mem_write(phys, value);
+                false
+            }
+            Page::Rom { .. } => true,
+            Page::Unmapped => false,
         }
     }
 
@@ -241,7 +250,7 @@ impl Memory {
     }
 
     pub(crate) fn poke<B: HostBus>(&mut self, bus: &mut B, phys: u32, value: u8) {
-        self.write(bus, phys, value);
+        let _ = self.write(bus, phys, value);
     }
 
     fn lookup(&self, phys: u32) -> Option<(Page, usize)> {

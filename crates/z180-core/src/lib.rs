@@ -50,6 +50,7 @@ pub enum IrqLine {
     Int2,
 }
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IrqSource {
     Nmi,
@@ -66,18 +67,74 @@ pub enum IrqSource {
 }
 
 #[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WatchId(u64);
+
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WatchKind {
+    Read,
+    Write,
+    Both,
+}
+
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Copy)]
+struct MemWatch {
+    id: WatchId,
+    base: u32,
+    size: u32,
+    kind: WatchKind,
+}
+
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    IoRead {
+        cycle: u64,
+        pc: u16,
+        port: u16,
+        val: u8,
+    },
+    IoWrite {
+        cycle: u64,
+        pc: u16,
+        port: u16,
+        val: u8,
+    },
+    MemWrite {
+        cycle: u64,
+        pc: u16,
+        phys: u32,
+        val: u8,
+    },
+    MemRead {
+        cycle: u64,
+        pc: u16,
+        phys: u32,
+        val: u8,
+    },
+    IrqAck {
+        cycle: u64,
+        source: IrqSource,
+        vector: u16,
+    },
     Trap {
         cycle: u64,
         pc: u16,
         opcode: [u8; 3],
         len: u8,
     },
+    RomWrite {
+        cycle: u64,
+        pc: u16,
+        phys: u32,
+        val: u8,
+    },
 }
 
 #[cfg(feature = "state")]
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
 
 #[cfg(feature = "state")]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -152,7 +209,15 @@ pub struct Z180<B: HostBus> {
     csio_cycles: u64,
     csio_clocked: bool,
     csio_tx_output: VecDeque<u8>,
-    events: Vec<Event>,
+    event_capacity: usize,
+    events: VecDeque<Event>,
+    events_lost: bool,
+    mem_watches: Vec<MemWatch>,
+    next_watch_id: u64,
+    io_trace: bool,
+    irq_trace: bool,
+    pc_watch: Option<u16>,
+    pc_watch_hits: u64,
 }
 
 #[cfg(feature = "state")]
@@ -202,7 +267,15 @@ struct SavedState {
     csio_cycles: u64,
     csio_clocked: bool,
     csio_tx_output: VecDeque<u8>,
+    event_capacity: usize,
     events: Vec<Event>,
+    events_lost: bool,
+    mem_watches: Vec<MemWatch>,
+    next_watch_id: u64,
+    io_trace: bool,
+    irq_trace: bool,
+    pc_watch: Option<u16>,
+    pc_watch_hits: u64,
 }
 
 impl<B: HostBus> Z180<B> {
@@ -260,7 +333,15 @@ impl<B: HostBus> Z180<B> {
             csio_cycles: 0,
             csio_clocked: false,
             csio_tx_output: VecDeque::new(),
-            events: Vec::new(),
+            event_capacity: config.event_capacity,
+            events: VecDeque::new(),
+            events_lost: false,
+            mem_watches: Vec::new(),
+            next_watch_id: 1,
+            io_trace: false,
+            irq_trace: false,
+            pc_watch: None,
+            pc_watch_hits: 0,
         };
         cpu.recompute_mmu_pages();
         Ok(cpu)
@@ -335,6 +416,8 @@ impl<B: HostBus> Z180<B> {
         self.csio_clocked = false;
         self.csio_tx_output.clear();
         self.events.clear();
+        self.events_lost = false;
+        self.pc_watch_hits = 0;
     }
 
     pub fn step(&mut self) -> u32 {
@@ -364,6 +447,9 @@ impl<B: HostBus> Z180<B> {
         }
 
         let pc = self.registers.get(Reg::PC);
+        if self.pc_watch == Some(pc) {
+            self.pc_watch_hits = self.pc_watch_hits.saturating_add(1);
+        }
         self.instruction_pc = pc;
         let first_opcode = self.read_logical(pc);
         let (opcode, descriptor, m1_fetches, is_indexed_bit) = match first_opcode {
@@ -579,8 +665,82 @@ impl<B: HostBus> Z180<B> {
         self.mmu_pages[page] + u32::from(logical & 0x0fff)
     }
 
+    pub fn add_mem_watch(&mut self, base: u32, size: u32, kind: WatchKind) -> WatchId {
+        let id = WatchId(self.next_watch_id);
+        self.next_watch_id = self.next_watch_id.wrapping_add(1);
+        if self.next_watch_id == 0 {
+            self.next_watch_id = 1;
+        }
+        self.mem_watches.push(MemWatch {
+            id,
+            base,
+            size,
+            kind,
+        });
+        let _ = self.ensure_event_storage();
+        id
+    }
+
+    pub fn remove_mem_watch(&mut self, id: WatchId) {
+        self.mem_watches.retain(|watch| watch.id != id);
+    }
+
+    pub fn set_io_trace(&mut self, enabled: bool) {
+        self.io_trace = enabled;
+        if enabled {
+            let _ = self.ensure_event_storage();
+        }
+    }
+
+    pub fn set_irq_trace(&mut self, enabled: bool) {
+        self.irq_trace = enabled;
+        if enabled {
+            let _ = self.ensure_event_storage();
+        }
+    }
+
+    pub fn set_pc_watch(&mut self, addr: Option<u16>) {
+        self.pc_watch = addr;
+        self.pc_watch_hits = 0;
+    }
+
+    pub fn pc_watch_hits(&self) -> u64 {
+        self.pc_watch_hits
+    }
+
     pub fn drain_events(&mut self) -> Vec<Event> {
-        core::mem::take(&mut self.events)
+        let mut drained = Vec::with_capacity(self.events.len());
+        drained.extend(self.events.drain(..));
+        drained
+    }
+
+    pub fn events_lost(&self) -> bool {
+        self.events_lost
+    }
+
+    pub fn clear_events_lost(&mut self) {
+        self.events_lost = false;
+    }
+
+    fn ensure_event_storage(&mut self) -> bool {
+        if self.event_capacity == 0 || self.events.capacity() >= self.event_capacity {
+            return self.event_capacity != 0;
+        }
+        self.events
+            .try_reserve_exact(self.event_capacity - self.events.len())
+            .is_ok()
+    }
+
+    fn push_event(&mut self, event: Event) {
+        if !self.ensure_event_storage() {
+            self.events_lost = true;
+            return;
+        }
+        if self.events.len() == self.event_capacity {
+            let _ = self.events.pop_front();
+            self.events_lost = true;
+        }
+        self.events.push_back(event);
     }
 
     #[cfg(feature = "state")]
@@ -630,7 +790,15 @@ impl<B: HostBus> Z180<B> {
             csio_cycles: self.csio_cycles,
             csio_clocked: self.csio_clocked,
             csio_tx_output: self.csio_tx_output.clone(),
-            events: self.events.clone(),
+            event_capacity: self.event_capacity,
+            events: self.events.iter().cloned().collect(),
+            events_lost: self.events_lost,
+            mem_watches: self.mem_watches.clone(),
+            next_watch_id: self.next_watch_id,
+            io_trace: self.io_trace,
+            irq_trace: self.irq_trace,
+            pc_watch: self.pc_watch,
+            pc_watch_hits: self.pc_watch_hits,
         };
 
         let mut bytes = Vec::new();
@@ -655,6 +823,14 @@ impl<B: HostBus> Z180<B> {
             .as_slice()
             .try_into()
             .map_err(|_| StateError::Decode)?;
+        if state.events.len() > state.event_capacity || state.next_watch_id == 0 {
+            return Err(StateError::Decode);
+        }
+        let mut events = VecDeque::new();
+        if events.try_reserve_exact(state.event_capacity).is_err() {
+            return Err(StateError::Decode);
+        }
+        events.extend(state.events.iter().cloned());
 
         self.registers = state.registers;
         self.memory = state.memory;
@@ -701,7 +877,15 @@ impl<B: HostBus> Z180<B> {
         self.csio_cycles = state.csio_cycles;
         self.csio_clocked = state.csio_clocked;
         self.csio_tx_output = state.csio_tx_output;
-        self.events = state.events;
+        self.event_capacity = state.event_capacity;
+        self.events = events;
+        self.events_lost = state.events_lost;
+        self.mem_watches = state.mem_watches;
+        self.next_watch_id = state.next_watch_id;
+        self.io_trace = state.io_trace;
+        self.irq_trace = state.irq_trace;
+        self.pc_watch = state.pc_watch;
+        self.pc_watch_hits = state.pc_watch_hits;
         Ok(())
     }
 
@@ -847,6 +1031,13 @@ impl<B: HostBus> Z180<B> {
         self.iff1 = false;
         self.push_word(pc);
         self.registers.set(Reg::PC, 0x0066);
+        if self.irq_trace {
+            self.push_event(Event::IrqAck {
+                cycle: self.cycle_count,
+                source: IrqSource::Nmi,
+                vector: 0x0066,
+            });
+        }
         u32::from(NMI_ACKNOWLEDGE_CYCLES)
     }
 
@@ -865,7 +1056,7 @@ impl<B: HostBus> Z180<B> {
         let pc = self.registers.get(Reg::PC);
         self.push_word(pc);
 
-        match source {
+        let cycles = match source {
             IrqSource::Int0 => match self.interrupt_mode {
                 0 => {
                     self.registers.set(Reg::PC, 0x0038);
@@ -910,7 +1101,15 @@ impl<B: HostBus> Z180<B> {
                 u32::from(VECTORED_ACKNOWLEDGE_CYCLES)
             }
             IrqSource::Nmi => u32::from(NMI_ACKNOWLEDGE_CYCLES),
+        };
+        if self.irq_trace {
+            self.push_event(Event::IrqAck {
+                cycle: self.cycle_count,
+                source,
+                vector: self.registers.get(Reg::PC),
+            });
         }
+        cycles
     }
 
     fn take_trap(&mut self, opcode: [u8; 3], len: u8, stacked_pc: u16, ufo: bool, m1_fetches: u8) {
@@ -921,7 +1120,7 @@ impl<B: HostBus> Z180<B> {
         self.ei_shadow = false;
         self.push_word(stacked_pc);
         self.registers.set(Reg::PC, 0);
-        self.events.push(Event::Trap {
+        self.push_event(Event::Trap {
             cycle: self.cycle_count,
             pc: self.instruction_pc,
             opcode,
@@ -2023,7 +2222,7 @@ impl<B: HostBus> Z180<B> {
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
         let physical = self.mmu_translate(logical);
-        self.memory.read(&mut self.bus, physical)
+        self.emulation_mem_read(physical)
     }
 
     fn write_logical(&mut self, logical: u16, value: u8) {
@@ -2031,7 +2230,52 @@ impl<B: HostBus> Z180<B> {
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
         let physical = self.mmu_translate(logical);
-        self.memory.write(&mut self.bus, physical, value);
+        self.emulation_mem_write(physical, value);
+    }
+
+    fn emulation_mem_read(&mut self, physical: u32) -> u8 {
+        let value = self.memory.read(&mut self.bus, physical);
+        if self.mem_watch_matches(physical, WatchKind::Read) {
+            self.push_event(Event::MemRead {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                phys: physical,
+                val: value,
+            });
+        }
+        value
+    }
+
+    fn emulation_mem_write(&mut self, physical: u32, value: u8) {
+        let rom_write = self.memory.write(&mut self.bus, physical, value);
+        if self.mem_watch_matches(physical, WatchKind::Write) {
+            self.push_event(Event::MemWrite {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                phys: physical,
+                val: value,
+            });
+        }
+        if rom_write {
+            self.push_event(Event::RomWrite {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                phys: physical,
+                val: value,
+            });
+        }
+    }
+
+    fn mem_watch_matches(&self, physical: u32, access: WatchKind) -> bool {
+        self.mem_watches.iter().any(|watch| {
+            let in_range = physical >= watch.base && physical - watch.base < watch.size;
+            let kind_matches = matches!(
+                (watch.kind, access),
+                (WatchKind::Read | WatchKind::Both, WatchKind::Read)
+                    | (WatchKind::Write | WatchKind::Both, WatchKind::Write)
+            );
+            in_range && kind_matches
+        })
     }
 
     fn internal_io_index(&self, port: u16) -> Option<usize> {
@@ -2045,14 +2289,24 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn read_io(&mut self, port: u16) -> u8 {
-        if let Some(index) = self.internal_io_index(port) {
+        let value = if let Some(index) = self.internal_io_index(port) {
             let _ = self.bus.io_read(port);
-            return self.read_internal_io(index);
+            self.read_internal_io(index)
+        } else {
+            self.timing_io_waits = self
+                .timing_io_waits
+                .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
+            self.bus.io_read(port)
+        };
+        if self.io_trace {
+            self.push_event(Event::IoRead {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                port,
+                val: value,
+            });
         }
-        self.timing_io_waits = self
-            .timing_io_waits
-            .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
-        self.bus.io_read(port)
+        value
     }
 
     fn read_internal_io(&mut self, index: usize) -> u8 {
@@ -2119,12 +2373,20 @@ impl<B: HostBus> Z180<B> {
         if let Some(index) = self.internal_io_index(port) {
             self.bus.io_write(port, value);
             self.write_internal_io(index, value);
-            return;
+        } else {
+            self.timing_io_waits = self
+                .timing_io_waits
+                .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
+            self.bus.io_write(port, value);
         }
-        self.timing_io_waits = self
-            .timing_io_waits
-            .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
-        self.bus.io_write(port, value);
+        if self.io_trace {
+            self.push_event(Event::IoWrite {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                port,
+                val: value,
+            });
+        }
     }
 
     fn write_internal_io(&mut self, index: usize, value: u8) {
@@ -2630,12 +2892,12 @@ impl<B: HostBus> Z180<B> {
         let byte = if source_mode == 3 {
             self.dma_io_read(source as u16)
         } else {
-            self.memory.read(&mut self.bus, source)
+            self.emulation_mem_read(source)
         };
         if destination_mode == 3 {
             self.dma_io_write(destination as u16, byte);
         } else {
-            self.memory.write(&mut self.bus, destination, byte);
+            self.emulation_mem_write(destination, byte);
         }
 
         let memory_waits = u32::from((self.io_regs[DCNTL] >> 6) & 0x03);
@@ -2702,11 +2964,11 @@ impl<B: HostBus> Z180<B> {
         let io = u16::from_le_bytes([self.io_regs[IAR1L], self.io_regs[IAR1H]]);
 
         if memory_to_io {
-            let byte = self.memory.read(&mut self.bus, memory);
+            let byte = self.emulation_mem_read(memory);
             self.dma_io_write(io, byte);
         } else {
             let byte = self.dma_io_read(io);
-            self.memory.write(&mut self.bus, memory, byte);
+            self.emulation_mem_write(memory, byte);
         }
 
         let memory_waits = u32::from((self.io_regs[DCNTL] >> 6) & 0x03);
@@ -2740,12 +3002,21 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn dma_io_read(&mut self, port: u16) -> u8 {
-        if let Some(index) = self.internal_io_index(port) {
+        let value = if let Some(index) = self.internal_io_index(port) {
             let _ = self.bus.io_read(port);
             self.read_internal_io(index)
         } else {
             self.bus.io_read(port)
+        };
+        if self.io_trace {
+            self.push_event(Event::IoRead {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                port,
+                val: value,
+            });
         }
+        value
     }
 
     fn dma_io_write(&mut self, port: u16, value: u8) {
@@ -2754,6 +3025,14 @@ impl<B: HostBus> Z180<B> {
             self.write_internal_io(index, value);
         } else {
             self.bus.io_write(port, value);
+        }
+        if self.io_trace {
+            self.push_event(Event::IoWrite {
+                cycle: self.cycle_count,
+                pc: self.instruction_pc,
+                port,
+                val: value,
+            });
         }
     }
 
@@ -3541,6 +3820,338 @@ mod tests {
         );
         assert_eq!(first_state, second_state);
         assert_eq!(first_events, second_events);
+    }
+
+    #[test]
+    fn event_memory_watch_fires_exactly_on_its_physical_half_open_range() {
+        let mut cpu = machine();
+        cpu.mem_poke(0x0100, 0x11);
+        cpu.mem_poke(0x0101, 0x22);
+        let watch = cpu.add_mem_watch(0x0100, 2, WatchKind::Both);
+
+        assert_eq!(cpu.read_logical(0x00ff), 0x00);
+        assert_eq!(cpu.read_logical(0x0100), 0x11);
+        assert_eq!(cpu.read_logical(0x0101), 0x22);
+        assert_eq!(cpu.read_logical(0x0102), 0x00);
+        cpu.write_logical(0x00ff, 0x30);
+        cpu.write_logical(0x0100, 0x31);
+        cpu.write_logical(0x0101, 0x32);
+        cpu.write_logical(0x0102, 0x33);
+
+        assert_eq!(
+            cpu.drain_events(),
+            vec![
+                Event::MemRead {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0100,
+                    val: 0x11,
+                },
+                Event::MemRead {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0101,
+                    val: 0x22,
+                },
+                Event::MemWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0100,
+                    val: 0x31,
+                },
+                Event::MemWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0101,
+                    val: 0x32,
+                },
+            ]
+        );
+
+        cpu.remove_mem_watch(watch);
+        let _ = cpu.read_logical(0x0100);
+        cpu.write_logical(0x0100, 0x44);
+        assert!(cpu.drain_events().is_empty());
+
+        let _ = cpu.add_mem_watch(0x0100, 0, WatchKind::Both);
+        let _ = cpu.read_logical(0x0100);
+        cpu.write_logical(0x0100, 0x55);
+        assert!(cpu.drain_events().is_empty());
+    }
+
+    #[test]
+    fn event_memory_watches_cover_dma_and_rom_write_attempts() {
+        let mut dma = machine();
+        dma.mem_poke(0x0100, 0xa5);
+        let _ = dma.add_mem_watch(0x0100, 1, WatchKind::Read);
+        let _ = dma.add_mem_watch(0x0200, 1, WatchKind::Write);
+        dma.write_internal_io(SAR0L, 0x00);
+        dma.write_internal_io(SAR0H, 0x01);
+        dma.write_internal_io(DAR0L, 0x00);
+        dma.write_internal_io(DAR0H, 0x02);
+        dma.write_internal_io(BCR0L, 0x01);
+        dma.write_internal_io(DMODE, 0x00);
+        dma.write_internal_io(DCNTL, 0x00);
+        dma.write_internal_io(DSTAT, 0x60);
+        assert_ne!(dma.step(), 0);
+        assert_eq!(
+            dma.drain_events(),
+            vec![
+                Event::MemRead {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0100,
+                    val: 0xa5,
+                },
+                Event::MemWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0200,
+                    val: 0xa5,
+                },
+            ]
+        );
+
+        let config = MachineConfig {
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1000,
+                kind: RegionKind::Rom(vec![0; 0x1000]),
+            }],
+            ..MachineConfig::default()
+        };
+        let mut rom = Z180::new(config, NullBus).expect("ROM configuration must be valid");
+        rom.mem_poke(0x0010, 0x11);
+        assert!(rom.drain_events().is_empty(), "host pokes are not watched");
+        let _ = rom.add_mem_watch(0x0010, 1, WatchKind::Write);
+        rom.write_logical(0x0010, 0x22);
+        assert_eq!(rom.mem_peek(0x0010), 0x00);
+        assert_eq!(
+            rom.drain_events(),
+            vec![
+                Event::MemWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0010,
+                    val: 0x22,
+                },
+                Event::RomWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x0010,
+                    val: 0x22,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn event_ring_retains_newest_entries_and_loss_is_sticky() {
+        let config = MachineConfig {
+            event_capacity: 2,
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1_0000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        let mut cpu = Z180::new(config, NullBus).expect("event-ring configuration must be valid");
+        let _ = cpu.add_mem_watch(0, 4, WatchKind::Read);
+        let _ = cpu.read_logical(0);
+        let _ = cpu.read_logical(1);
+        let _ = cpu.read_logical(2);
+
+        assert!(cpu.events_lost());
+        let storage_capacity = cpu.events.capacity();
+        assert_eq!(
+            cpu.drain_events(),
+            vec![
+                Event::MemRead {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 1,
+                    val: 0,
+                },
+                Event::MemRead {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 2,
+                    val: 0,
+                },
+            ]
+        );
+        assert_eq!(cpu.events.capacity(), storage_capacity);
+        assert!(cpu.events_lost(), "draining does not clear the sticky flag");
+        cpu.clear_events_lost();
+        assert!(!cpu.events_lost());
+
+        let _ = cpu.read_logical(3);
+        cpu.reset();
+        assert!(!cpu.events_lost());
+        assert!(cpu.drain_events().is_empty());
+        let _ = cpu.read_logical(0);
+        assert_eq!(cpu.drain_events().len(), 1, "reset preserves watches");
+
+        let disabled_config = MachineConfig {
+            event_capacity: 0,
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        let mut disabled =
+            Z180::new(disabled_config, NullBus).expect("zero event capacity must be valid");
+        let _ = disabled.add_mem_watch(0, 1, WatchKind::Read);
+        let _ = disabled.read_logical(0);
+        assert!(disabled.drain_events().is_empty());
+        assert!(disabled.events_lost());
+    }
+
+    #[test]
+    fn event_io_trace_records_cpu_dma_and_internal_duplicate_accesses_once() {
+        let mut cpu = recording_machine(Variant::Z80180);
+        cpu.instruction_pc = 0x1234;
+        cpu.bus.io_read_value = 0x5a;
+        cpu.set_io_trace(true);
+
+        assert_eq!(cpu.read_io(0x0040), 0x5a);
+        cpu.write_io(0x0041, 0xa5);
+        assert_eq!(cpu.read_io(CNTLA0 as u16), 0x10);
+        assert_eq!(cpu.dma_io_read(0x0042), 0x5a);
+        cpu.dma_io_write(0x0043, 0xc3);
+
+        assert_eq!(
+            cpu.drain_events(),
+            vec![
+                Event::IoRead {
+                    cycle: 0,
+                    pc: 0x1234,
+                    port: 0x0040,
+                    val: 0x5a,
+                },
+                Event::IoWrite {
+                    cycle: 0,
+                    pc: 0x1234,
+                    port: 0x0041,
+                    val: 0xa5,
+                },
+                Event::IoRead {
+                    cycle: 0,
+                    pc: 0x1234,
+                    port: CNTLA0 as u16,
+                    val: 0x10,
+                },
+                Event::IoRead {
+                    cycle: 0,
+                    pc: 0x1234,
+                    port: 0x0042,
+                    val: 0x5a,
+                },
+                Event::IoWrite {
+                    cycle: 0,
+                    pc: 0x1234,
+                    port: 0x0043,
+                    val: 0xc3,
+                },
+            ]
+        );
+        assert_eq!(cpu.bus.io_reads, vec![0x0040, CNTLA0 as u16, 0x0042]);
+
+        cpu.set_io_trace(false);
+        let _ = cpu.read_io(0x0044);
+        assert!(cpu.drain_events().is_empty());
+    }
+
+    #[test]
+    fn event_irq_trace_and_pc_watch_use_acknowledge_and_instruction_boundaries() {
+        let mut nmi = machine();
+        nmi.set_irq_trace(true);
+        nmi.set_nmi(true);
+        assert_ne!(nmi.step(), 0);
+        assert_eq!(
+            nmi.drain_events(),
+            vec![Event::IrqAck {
+                cycle: 0,
+                source: IrqSource::Nmi,
+                vector: 0x0066,
+            }]
+        );
+
+        let mut int0 = machine();
+        int0.set_irq_trace(true);
+        int0.set_interrupt_mode(1);
+        int0.set_iff1(true);
+        int0.set_irq(IrqLine::Int0, true);
+        assert_ne!(int0.step(), 0);
+        assert_eq!(
+            int0.drain_events(),
+            vec![Event::IrqAck {
+                cycle: 0,
+                source: IrqSource::Int0,
+                vector: 0x0038,
+            }]
+        );
+
+        let mut pc = machine();
+        pc.mem_poke(0, 0x00);
+        pc.mem_poke(1, 0x76);
+        pc.set_pc_watch(Some(1));
+        assert_ne!(pc.step(), 0);
+        assert_eq!(pc.pc_watch_hits(), 0);
+        assert_ne!(pc.step(), 0);
+        assert_eq!(pc.pc_watch_hits(), 1);
+        assert_ne!(pc.step(), 0);
+        assert_eq!(pc.pc_watch_hits(), 1, "HALT idle is not instruction entry");
+
+        pc.set_pc_watch(Some(2));
+        assert_eq!(pc.pc_watch_hits(), 0, "setting a watch resets its count");
+        assert_ne!(pc.step(), 0);
+        assert_eq!(pc.pc_watch_hits(), 0);
+        pc.set_pc_watch(Some(0));
+        pc.reset();
+        assert_eq!(pc.pc_watch_hits(), 0);
+        assert_ne!(pc.step(), 0);
+        assert_eq!(pc.pc_watch_hits(), 1, "reset preserves the watched address");
+    }
+
+    #[cfg(feature = "state")]
+    #[test]
+    fn event_debug_configuration_and_ring_round_trip_in_save_state() {
+        let config = MachineConfig {
+            event_capacity: 2,
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1_0000,
+                kind: RegionKind::Ram,
+            }],
+            ..MachineConfig::default()
+        };
+        let mut original =
+            Z180::new(config, NullBus).expect("debug-state configuration must be valid");
+        let _ = original.add_mem_watch(0, 4, WatchKind::Read);
+        original.set_io_trace(true);
+        original.set_irq_trace(true);
+        original.set_pc_watch(Some(0));
+        assert_ne!(original.step(), 0);
+        let _ = original.read_logical(1);
+        let _ = original.read_logical(2);
+        assert!(original.events_lost());
+        assert_eq!(original.pc_watch_hits(), 1);
+
+        let saved = original.save_state();
+        assert_eq!(saved.first(), Some(&STATE_VERSION));
+        let mut resumed = machine();
+        assert_eq!(resumed.load_state(&saved), Ok(()));
+        assert_eq!(resumed.save_state(), saved);
+        assert!(resumed.events_lost());
+        assert_eq!(resumed.pc_watch_hits(), 1);
+        assert_eq!(resumed.drain_events(), original.drain_events());
+
+        let _ = resumed.read_logical(3);
+        assert_eq!(resumed.drain_events().len(), 1, "memory watch was restored");
     }
 
     #[test]

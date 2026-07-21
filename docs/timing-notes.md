@@ -157,6 +157,22 @@ cycle boundary. The DMA physical pages stay outside the CPU's identity-mapped
 logical 64 KiB, preventing transfer data from becoming accidental code. The
 test requires byte-identical state payloads and identical drained events.
 
+## Debug event boundary
+
+Event timestamps use the core's completed-cycle counter at the instant the
+observable action begins. CPU memory and I/O events therefore carry the cycle
+count at the start of their instruction, while DMA events carry the count at
+the start of the serviced DMA byte. Interrupt-acknowledge events likewise use
+the count before acknowledge clocks are committed. Multiple events within one
+instruction or DMA byte can consequently share a timestamp; their order in
+the event ring preserves the access order.
+
+Memory watch events are emitted after a read obtains its value and after a
+write attempt reaches memory. A watched ROM write therefore produces the
+watched `MemWrite` first and the unconditional `RomWrite` second at the same
+cycle. Debugger-side physical `mem_peek` and `mem_poke` operations are outside
+the emulation timeline and emit no events.
+
 ## Intentional approximations
 
 ### Bus phases

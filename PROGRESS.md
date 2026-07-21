@@ -2162,6 +2162,82 @@ complete pending only the P6.8 commit, push, and exact CI completion.
 
 ## Phase 7 — Debug, trace, save-state, disassembler
 
+### P7.1 — Event ring, watches, and I/O/IRQ trace
+
+Q explicitly authorized completing the missing section 2.2 event API design.
+The fixed API now gives `MachineConfig` an `event_capacity` (default 4096),
+uses opaque `WatchId` values with `WatchKind::{Read, Write, Both}`, and exposes
+the sticky loss state through `events_lost()` and `clear_events_lost()`.
+`PLAN.md` records the exact ring, reservation, memory-watch, I/O-trace,
+PC-watch, and reset semantics so later bindings have one durable contract.
+
+The core retains the newest configured number of events in chronological
+order. Storage is reserved when a producer is enabled or the first
+unconditional event occurs and is reused across drains. Overflow, capacity
+zero, or a failed reservation drops the affected observation and sets the
+sticky loss flag without panicking. CPU and DMA physical memory accesses feed
+the same watch path; host `mem_peek`/`mem_poke` access does not. CPU and DMA
+I/O each emit exactly one event per guest-visible access, including internal
+I/O accesses with their required duplicate external bus cycle. IRQ
+acknowledgements, undefined-opcode traps, and attempted ROM writes emit their
+corresponding event variants.
+
+The PC watch counts once at instruction entry, excludes HALT idle cycles, and
+resets its count when changed. Hardware reset preserves watch/trace producer
+configuration while clearing queued observations, loss state, and PC hits.
+The optional `state` payload persists the complete debug configuration and
+ring, so its version byte advanced from 1 to 2.
+
+Targeted P7.1 authority:
+
+```text
+> cargo test -p z180-core --features state event_ -- --nocapture
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src\lib.rs (target\debug\deps\z180_core-5fc747acf9de75a9.exe)
+
+running 6 tests
+test tests::event_io_trace_records_cpu_dma_and_internal_duplicate_accesses_once ... ok
+test tests::event_ring_retains_newest_entries_and_loss_is_sticky ... ok
+test tests::event_memory_watch_fires_exactly_on_its_physical_half_open_range ... ok
+test tests::event_memory_watches_cover_dma_and_rom_write_attempts ... ok
+test tests::event_irq_trace_and_pc_watch_use_acknowledge_and_instruction_boundaries ... ok
+test tests::event_debug_configuration_and_ring_round_trip_in_save_state ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.01s
+```
+
+The default and state-feature core suites passed 76/76 and 80/80 respectively.
+The complete workspace regression also passed:
+
+```text
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+running 76 tests
+test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Static authorities:
+
+```text
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.77s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check and `git diff --check` completed with no output.
+
 ## Phase 8 — Python binding, qns migration, reference differential
 
 ## Phase 9 — WASM and TypeScript
