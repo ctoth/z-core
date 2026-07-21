@@ -620,6 +620,35 @@ still-unimplemented `CB` prefix; harness behavior is unchanged.
 
 P2.3 and Gate G2 remain unchecked.
 
+### P2.3 — Interrupt-check point (2026-07-20)
+
+`step()` now enters a private interrupt service point before the HALT hold and
+before fetching the next opcode. The Phase 2 implementation returns no pending
+source unconditionally: interrupt pins, source priority, acknowledge behavior,
+and HALT wake-up remain owned by Phase 5. EI shadow remains observable at the
+check point and is consumed only when the following instruction proceeds to
+dispatch.
+
+Focused regressions prove the check point has no Phase 2 source and does not
+consume EI shadow itself. Final quality authority:
+
+```text
+> cargo test --workspace
+running 12 tests (z180-cli)
+test result: ok. 12 passed; 0 failed; 0 ignored
+running 13 tests (z180-core)
+test result: ok. 13 passed; 0 failed; 0 ignored
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.64s
+
+> cargo fmt --all --check
+```
+
+The format check completed successfully with no output. Gate G2 remains the
+next unchecked plan item.
+
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP
 
 ## Phase 4 — Timing and ZEXDOC

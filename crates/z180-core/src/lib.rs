@@ -70,6 +70,10 @@ impl<B: HostBus> Z180<B> {
     }
 
     pub fn step(&mut self) -> u32 {
+        if let Some(cycles) = self.interrupt_check_point() {
+            return self.finish_step(cycles);
+        }
+
         if self.halted {
             return self.finish_step(1);
         }
@@ -166,6 +170,13 @@ impl<B: HostBus> Z180<B> {
 
     pub fn is_opcode_implemented(opcode: u8) -> bool {
         Self::MAIN_OPCODES[usize::from(opcode)].handler.is_some()
+    }
+
+    fn interrupt_check_point(&mut self) -> Option<u32> {
+        // Phase 2 establishes the pre-fetch service boundary only. Phase 5
+        // owns interrupt pins, prioritized sources, acknowledge behavior, and
+        // HALT wake-up, so no source can fire here yet.
+        None
     }
 
     fn accumulator(&self) -> u8 {
@@ -855,6 +866,15 @@ mod tests {
         assert!(!cpu.iff1());
         assert!(!cpu.iff2());
         assert!(!cpu.ei_shadow);
+    }
+
+    #[test]
+    fn interrupt_check_point_has_no_phase_two_sources() {
+        let mut cpu = machine();
+        cpu.ei_shadow = true;
+
+        assert_eq!(cpu.interrupt_check_point(), None);
+        assert!(cpu.ei_shadow);
     }
 
     fn expected_daa(accumulator: u8, flags: u8) -> (u8, u8) {
