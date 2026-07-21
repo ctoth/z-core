@@ -133,8 +133,23 @@ pub enum Event {
     },
 }
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TraceEntry {
+    pub cycle: u64,
+    pub pc: u16,
+    pub phys_pc: u32,
+    pub bytes: [u8; 4],
+    pub len: u8,
+}
+
+struct TraceCapture {
+    entry: TraceEntry,
+    captured: u8,
+}
+
 #[cfg(feature = "state")]
-const STATE_VERSION: u8 = 2;
+const STATE_VERSION: u8 = 3;
 
 #[cfg(feature = "state")]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -218,6 +233,9 @@ pub struct Z180<B: HostBus> {
     irq_trace: bool,
     pc_watch: Option<u16>,
     pc_watch_hits: u64,
+    insn_trace_capacity: Option<usize>,
+    insn_trace: VecDeque<TraceEntry>,
+    insn_trace_capture: Option<TraceCapture>,
 }
 
 #[cfg(feature = "state")]
@@ -276,6 +294,8 @@ struct SavedState {
     irq_trace: bool,
     pc_watch: Option<u16>,
     pc_watch_hits: u64,
+    insn_trace_capacity: Option<usize>,
+    insn_trace: Vec<TraceEntry>,
 }
 
 impl<B: HostBus> Z180<B> {
@@ -342,6 +362,9 @@ impl<B: HostBus> Z180<B> {
             irq_trace: false,
             pc_watch: None,
             pc_watch_hits: 0,
+            insn_trace_capacity: None,
+            insn_trace: VecDeque::new(),
+            insn_trace_capture: None,
         };
         cpu.recompute_mmu_pages();
         Ok(cpu)
@@ -418,6 +441,8 @@ impl<B: HostBus> Z180<B> {
         self.events.clear();
         self.events_lost = false;
         self.pc_watch_hits = 0;
+        self.insn_trace.clear();
+        self.insn_trace_capture = None;
     }
 
     pub fn step(&mut self) -> u32 {
@@ -451,6 +476,7 @@ impl<B: HostBus> Z180<B> {
             self.pc_watch_hits = self.pc_watch_hits.saturating_add(1);
         }
         self.instruction_pc = pc;
+        self.begin_insn_trace(pc);
         let first_opcode = self.read_logical(pc);
         let (opcode, descriptor, m1_fetches, is_indexed_bit) = match first_opcode {
             0xcb => {
@@ -505,6 +531,13 @@ impl<B: HostBus> Z180<B> {
             } else {
                 self.take_trap([first_opcode, 0, 0], 1, pc.wrapping_add(1), false, 1);
             }
+            self.finish_insn_trace(if is_indexed_bit {
+                4
+            } else if matches!(first_opcode, 0xcb | 0xdd | 0xed | 0xfd) {
+                2
+            } else {
+                1
+            });
             let cycles = if is_indexed_bit {
                 THIRD_OPCODE_TRAP_CYCLES
             } else {
@@ -529,6 +562,7 @@ impl<B: HostBus> Z180<B> {
         self.ei_shadow = false;
 
         handler(self, opcode);
+        self.finish_insn_trace(descriptor.length);
 
         let repeat_completed = self.registers.get(Reg::PC) != self.instruction_pc;
         let cycles = descriptor
@@ -722,6 +756,101 @@ impl<B: HostBus> Z180<B> {
         self.events_lost = false;
     }
 
+    pub fn set_insn_trace(&mut self, capacity: Option<usize>) {
+        self.insn_trace_capture = None;
+        let Some(capacity) = capacity else {
+            self.insn_trace_capacity = None;
+            self.insn_trace = VecDeque::new();
+            return;
+        };
+
+        if self.insn_trace.capacity() < capacity
+            && self
+                .insn_trace
+                .try_reserve_exact(capacity - self.insn_trace.len())
+                .is_err()
+        {
+            return;
+        }
+        while self.insn_trace.len() > capacity {
+            let _ = self.insn_trace.pop_front();
+        }
+        self.insn_trace_capacity = Some(capacity);
+    }
+
+    pub fn drain_insn_trace(&mut self) -> Vec<TraceEntry> {
+        let mut drained = Vec::with_capacity(self.insn_trace.len());
+        drained.extend(self.insn_trace.drain(..));
+        drained
+    }
+
+    fn begin_insn_trace(&mut self, pc: u16) {
+        let Some(capacity) = self.insn_trace_capacity else {
+            return;
+        };
+        if capacity == 0 {
+            return;
+        }
+        self.insn_trace_capture = Some(TraceCapture {
+            entry: TraceEntry {
+                cycle: self.cycle_count,
+                pc,
+                phys_pc: self.mmu_translate(pc),
+                bytes: [0; 4],
+                len: 0,
+            },
+            captured: 0,
+        });
+    }
+
+    fn capture_insn_byte(&mut self, logical: u16, value: u8) {
+        let Some(capture) = &mut self.insn_trace_capture else {
+            return;
+        };
+        let offset = logical.wrapping_sub(capture.entry.pc);
+        if offset >= 4 {
+            return;
+        }
+        let bit = 1_u8 << offset;
+        if capture.captured & bit == 0 {
+            capture.entry.bytes[usize::from(offset)] = value;
+            capture.captured |= bit;
+        }
+    }
+
+    fn finish_insn_trace(&mut self, len: u8) {
+        let Some(mut capture) = self.insn_trace_capture.take() else {
+            return;
+        };
+        let used = usize::from(len).min(capture.entry.bytes.len());
+        capture.entry.len = used as u8;
+        for byte in &mut capture.entry.bytes[used..] {
+            *byte = 0;
+        }
+        self.push_insn_trace(capture.entry);
+    }
+
+    fn push_insn_trace(&mut self, entry: TraceEntry) {
+        let Some(capacity) = self.insn_trace_capacity else {
+            return;
+        };
+        if capacity == 0 {
+            return;
+        }
+        if self.insn_trace.capacity() < capacity
+            && self
+                .insn_trace
+                .try_reserve_exact(capacity - self.insn_trace.len())
+                .is_err()
+        {
+            return;
+        }
+        if self.insn_trace.len() == capacity {
+            let _ = self.insn_trace.pop_front();
+        }
+        self.insn_trace.push_back(entry);
+    }
+
     fn ensure_event_storage(&mut self) -> bool {
         if self.event_capacity == 0 || self.events.capacity() >= self.event_capacity {
             return self.event_capacity != 0;
@@ -799,6 +928,8 @@ impl<B: HostBus> Z180<B> {
             irq_trace: self.irq_trace,
             pc_watch: self.pc_watch,
             pc_watch_hits: self.pc_watch_hits,
+            insn_trace_capacity: self.insn_trace_capacity,
+            insn_trace: self.insn_trace.iter().cloned().collect(),
         };
 
         let mut bytes = Vec::new();
@@ -823,7 +954,14 @@ impl<B: HostBus> Z180<B> {
             .as_slice()
             .try_into()
             .map_err(|_| StateError::Decode)?;
-        if state.events.len() > state.event_capacity || state.next_watch_id == 0 {
+        let insn_trace_is_valid = match state.insn_trace_capacity {
+            Some(capacity) => state.insn_trace.len() <= capacity,
+            None => state.insn_trace.is_empty(),
+        };
+        if state.events.len() > state.event_capacity
+            || state.next_watch_id == 0
+            || !insn_trace_is_valid
+        {
             return Err(StateError::Decode);
         }
         let mut events = VecDeque::new();
@@ -831,6 +969,13 @@ impl<B: HostBus> Z180<B> {
             return Err(StateError::Decode);
         }
         events.extend(state.events.iter().cloned());
+        let mut insn_trace = VecDeque::new();
+        if let Some(capacity) = state.insn_trace_capacity
+            && insn_trace.try_reserve_exact(capacity).is_err()
+        {
+            return Err(StateError::Decode);
+        }
+        insn_trace.extend(state.insn_trace.iter().cloned());
 
         self.registers = state.registers;
         self.memory = state.memory;
@@ -886,6 +1031,9 @@ impl<B: HostBus> Z180<B> {
         self.irq_trace = state.irq_trace;
         self.pc_watch = state.pc_watch;
         self.pc_watch_hits = state.pc_watch_hits;
+        self.insn_trace_capacity = state.insn_trace_capacity;
+        self.insn_trace = insn_trace;
+        self.insn_trace_capture = None;
         Ok(())
     }
 
@@ -2222,7 +2370,9 @@ impl<B: HostBus> Z180<B> {
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
         let physical = self.mmu_translate(logical);
-        self.emulation_mem_read(physical)
+        let value = self.emulation_mem_read(physical);
+        self.capture_insn_byte(logical, value);
+        value
     }
 
     fn write_logical(&mut self, logical: u16, value: u8) {
@@ -4152,6 +4302,133 @@ mod tests {
 
         let _ = resumed.read_logical(3);
         assert_eq!(resumed.drain_events().len(), 1, "memory watch was restored");
+    }
+
+    #[test]
+    fn insn_trace_records_fetched_bytes_physical_pc_and_traps_without_extra_reads() {
+        let mut cpu = mmu_machine();
+        cpu.write_internal_io(BBR, 0x10);
+        cpu.write_internal_io(CBAR, 0xf4);
+        cpu.set_reg(Reg::PC, 0x4000);
+        cpu.set_reg(Reg::IX, 0x5000);
+        for (offset, byte) in [0x3e, 0x42, 0xdd, 0xcb, 0x01, 0x46, 0xed, 0x31]
+            .into_iter()
+            .enumerate()
+        {
+            cpu.mem_poke(0x1_4000 + offset as u32, byte);
+        }
+        let _ = cpu.add_mem_watch(0x1_4000, 8, WatchKind::Read);
+        let _ = cpu.add_mem_watch(0x1_5001, 1, WatchKind::Read);
+        cpu.set_insn_trace(Some(3));
+
+        let first_cycles = cpu.step();
+        let second_cycles = cpu.step();
+        let _ = cpu.step();
+
+        assert_eq!(
+            cpu.drain_insn_trace(),
+            vec![
+                TraceEntry {
+                    cycle: 0,
+                    pc: 0x4000,
+                    phys_pc: 0x1_4000,
+                    bytes: [0x3e, 0x42, 0, 0],
+                    len: 2,
+                },
+                TraceEntry {
+                    cycle: u64::from(first_cycles),
+                    pc: 0x4002,
+                    phys_pc: 0x1_4002,
+                    bytes: [0xdd, 0xcb, 0x01, 0x46],
+                    len: 4,
+                },
+                TraceEntry {
+                    cycle: u64::from(first_cycles + second_cycles),
+                    pc: 0x4006,
+                    phys_pc: 0x1_4006,
+                    bytes: [0xed, 0x31, 0, 0],
+                    len: 2,
+                },
+            ]
+        );
+        let watched_reads: Vec<u32> = cpu
+            .drain_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::MemRead { phys, .. } => Some(phys),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            watched_reads,
+            vec![
+                0x1_4000, 0x1_4001, 0x1_4002, 0x1_4003, 0x1_4005, 0x1_4004, 0x1_5001, 0x1_4006,
+                0x1_4007,
+            ],
+            "tracing observes existing fetches without adding memory reads"
+        );
+    }
+
+    #[test]
+    fn insn_trace_ring_resizes_drains_resets_and_disables_exactly() {
+        let mut cpu = machine();
+        cpu.mem_poke(0, 0x00);
+        cpu.mem_poke(1, 0x00);
+        cpu.mem_poke(2, 0x00);
+        cpu.mem_poke(3, 0x76);
+        cpu.set_insn_trace(Some(3));
+        assert_ne!(cpu.step(), 0);
+        assert_ne!(cpu.step(), 0);
+        assert_ne!(cpu.step(), 0);
+        assert_ne!(cpu.step(), 0);
+
+        cpu.set_insn_trace(Some(2));
+        assert_eq!(
+            cpu.drain_insn_trace()
+                .into_iter()
+                .map(|entry| entry.pc)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        let storage_capacity = cpu.insn_trace.capacity();
+        assert_ne!(cpu.step(), 0);
+        assert!(cpu.drain_insn_trace().is_empty(), "HALT idle is not traced");
+        assert_eq!(cpu.insn_trace.capacity(), storage_capacity);
+
+        cpu.reset();
+        assert!(cpu.drain_insn_trace().is_empty());
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(cpu.drain_insn_trace()[0].pc, 0);
+
+        cpu.set_insn_trace(Some(0));
+        assert_ne!(cpu.step(), 0);
+        assert!(cpu.drain_insn_trace().is_empty());
+        cpu.set_insn_trace(None);
+        assert_eq!(cpu.insn_trace_capacity, None);
+        assert_eq!(cpu.insn_trace.capacity(), 0);
+    }
+
+    #[cfg(feature = "state")]
+    #[test]
+    fn insn_trace_configuration_and_ring_round_trip_in_save_state() {
+        let mut original = machine();
+        original.mem_poke(0, 0x00);
+        original.mem_poke(1, 0x00);
+        original.mem_poke(2, 0x00);
+        original.set_insn_trace(Some(2));
+        assert_ne!(original.step(), 0);
+        assert_ne!(original.step(), 0);
+
+        let saved = original.save_state();
+        assert_eq!(saved.first(), Some(&STATE_VERSION));
+        let mut resumed = machine();
+        assert_eq!(resumed.load_state(&saved), Ok(()));
+        assert_eq!(resumed.save_state(), saved);
+        assert_eq!(resumed.drain_insn_trace(), original.drain_insn_trace());
+
+        assert_ne!(resumed.step(), 0);
+        assert_ne!(original.step(), 0);
+        assert_eq!(resumed.drain_insn_trace(), original.drain_insn_trace());
     }
 
     #[test]

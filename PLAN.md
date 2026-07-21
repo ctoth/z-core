@@ -306,6 +306,20 @@ before opcode fetch, and HALT idle cycles do not add hits. Hardware `reset()`
 preserves watch/trace configuration but clears queued events, loss state, and
 the PC hit count.
 
+Instruction tracing records one entry for each executed instruction, including
+an instruction that takes the undefined-opcode TRAP. Interrupt acknowledges,
+HALT idle cycles, SLP idle calls, and DMA transfers do not create instruction
+entries. `cycle` and `phys_pc` are sampled at instruction entry; `bytes`
+contains the bytes actually fetched from guest memory in logical-address order,
+zero-filled beyond `len`, without additional bus reads. The ring retains the
+newest configured entries in chronological order. `set_insn_trace(Some(n))`
+enables tracing with capacity `n`, preserving the newest already queued entries
+that fit; `Some(0)` records nothing. `set_insn_trace(None)` disables tracing,
+clears its queue, and releases its storage. `drain_insn_trace()` reuses enabled
+ring storage. Hardware `reset()` preserves the enabled capacity but clears
+queued instruction entries. Save states include the instruction-trace setting
+and queue.
+
 Design rule for the hot path: `step()` reads instruction bytes via an inlined
 page-table lookup; no trait-object dispatch for Ram/Rom pages; `HostBus` is
 only reached for `External` pages, external I/O ports, and UM-required

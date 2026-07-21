@@ -173,6 +173,21 @@ watched `MemWrite` first and the unconditional `RomWrite` second at the same
 cycle. Debugger-side physical `mem_peek` and `mem_poke` operations are outside
 the emulation timeline and emit no events.
 
+## Instruction trace boundary
+
+An instruction trace entry samples `cycle`, logical `pc`, and translated
+`phys_pc` immediately before the first opcode fetch. DMA service has already
+advanced the machine clock at that point; an interrupt acknowledge, HALT idle
+cycle, or SLP idle call returns before trace capture begins. The HALT and SLP
+instructions themselves are ordinary executed instructions and are traced.
+
+Trace bytes come from the instruction's existing logical reads, not a second
+memory inspection. This preserves external-bus access counts and records the
+value that execution actually consumed. DDCB/FDCB fetch their final opcode
+before their displacement, but the trace stores both by logical-address offset
+so `bytes` remains program order. Undefined-opcode TRAP entries are finalized
+before the trap's cycles advance the machine clock.
+
 ## Intentional approximations
 
 ### Bus phases

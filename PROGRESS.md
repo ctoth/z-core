@@ -2238,6 +2238,65 @@ Static authorities:
 
 The formatting check and `git diff --check` completed with no output.
 
+### P7.2 — Instruction trace ring
+
+The public instruction trace uses `TraceEntry { cycle, pc, phys_pc, bytes,
+len }`, `set_insn_trace(Option<usize>)`, and `drain_insn_trace()`. Enabling it
+preallocates a newest-retained ring; resizing preserves the newest queued
+entries that fit, `Some(0)` records nothing, and `None` disables tracing,
+clears the queue, and releases storage. Draining preserves enabled storage for
+reuse, while reset preserves the configured capacity and clears observations.
+
+Capture is attached to the existing logical-read path after DMA, interrupt,
+HALT, and SLP checks. It therefore records the bytes the guest actually
+fetched without issuing extra memory or HostBus reads. Bytes are stored in
+logical-address order even for DDCB/FDCB's `0, 1, 3, 2` fetch order. Each
+normal instruction and undefined-opcode TRAP produces one entry; interrupt
+acknowledgements, DMA transfers, and idle calls do not. The optional state
+payload persists the trace setting and ring, advancing its version from 2 to
+3.
+
+The focused test covers MMU-translated `phys_pc`, immediate and DDCB byte
+capture, an undefined `ED 31` TRAP, and the exact watched-read sequence proving
+that tracing adds no bus reads. Separate tests cover overflow/resize,
+allocation reuse, HALT idle exclusion, reset, zero capacity, disable, and
+save/load continuation.
+
+```text
+> cargo test -p z180-core --features state insn_trace -- --nocapture
+running 3 tests
+test tests::insn_trace_ring_resizes_drains_resets_and_disables_exactly ... ok
+test tests::insn_trace_records_fetched_bytes_physical_pc_and_traps_without_extra_reads ... ok
+test tests::insn_trace_configuration_and_ring_round_trip_in_save_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out; finished in 0.01s
+
+> cargo test -p z180-core --features state
+running 83 tests
+test result: ok. 83 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+running 78 tests
+test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy -p z180-core --all-targets --features state -- -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.53s
+
+> cargo fmt --all -- --check
+```
+
+The formatting check and `git diff --check` completed with no output.
+
 ## Phase 8 — Python binding, qns migration, reference differential
 
 ## Phase 9 — WASM and TypeScript
