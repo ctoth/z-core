@@ -1151,6 +1151,39 @@ The format check completed successfully with no output. Gate G4 remains in
 progress; Phase 4 task 3, `docs/timing-notes.md`, is the next unchecked plan
 item.
 
+### P4.3 — timing-model notes (2026-07-21)
+
+`docs/timing-notes.md` now defines the timing contract. It distinguishes the
+implemented instruction base states and DCNTL access waits from the deliberate
+v0.1 approximations: no T-state bus waveform, zero cycle cost for dynamic RAM
+refresh, and one-byte DMA timing units interleaved with the instruction-level
+CPU timeline. It records why those approximations preserve the observable
+cycle/peripheral contract without adding bus-phase machinery to the hot path.
+
+The document also fixes the public accounting unit as system-clock phi cycles,
+defines `step()`, `run()`, and `cycle_count()` behavior, records that reset does
+not rewind elapsed time, and marks internal-I/O timing and DMA/refresh runtime
+behavior as owned by their later plan phases rather than claiming they already
+exist.
+
+Repository gates pass:
+
+```text
+> cargo test --workspace
+z180-cli: 15 passed; 0 failed
+z180-core: 26 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo]
+
+> cargo fmt --all -- --check
+```
+
+The format check completed successfully with no output. Gate G4 remains in
+progress; Phase 4 task 4, the hand-computed timing spot-check suite, is the
+next unchecked plan item.
+
 ## Phase 5 — Interrupts, MMU, internal I/O window
 
 ## Phase 6 — On-chip peripherals
