@@ -151,6 +151,66 @@ examples, validate every checked-in case and count, and generate two complete
 temporary corpora whose relative trees and bytes must match. `--check` performs
 the same validation and byte comparison against the checked-in corpus.
 
+### P1.6 — ZEX assets and harness skeleton (2026-07-20)
+
+`zexdoc.com` is pinned from the dedicated `agn453/ZEXALL` repository at commit
+`8f71d418bae69a476a5a0e5c6e122c8801b8d9f4`. The upstream identifies it as
+Frank D. Cringle's documented-flags exerciser extracted from YAZE-AG 2.51.3
+and licensed GPL-2.0. The 8,704-byte binary's SHA-256 is
+`34923a7ed82285d3038b2d54bd64899e12173eebb61f9d07b4fc72e78af2ae8f`.
+`tests/vendor/zex/NOTICES.md` records the immutable source and license URLs.
+
+The real vendored artifact loads and stops cleanly on the Phase 1 stub:
+
+```text
+> cargo run -p z180-cli -- zex tests/vendor/zex/zexdoc.com
+   Compiling z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.35s
+     Running `target\debug\z180-cli.exe zex tests/vendor/zex/zexdoc.com`
+unimplemented opcode at PC=0100: c3
+```
+
+Final workspace authority:
+
+```text
+> cargo test --workspace
+
+running 9 tests
+test sst::policy::tests::appendix_a_policy_excludes_known_undefined_families ... ok
+test sst::policy::tests::opcode_parser_skips_displacement_placeholder ... ok
+test sst::policy::tests::only_filter_expands_inclusive_main_opcode_ranges ... ok
+test sst::tests::sabotage_reverses_only_ld_operands ... ok
+test sst::tests::comparison_reports_the_first_differing_field ... ok
+test sst::tests::comparison_masks_xy_flags_and_r_high_bit ... ok
+test zex::tests::bdos_console_output_returns_to_the_stacked_address ... ok
+test zex::tests::bdos_string_output_stops_at_dollar ... ok
+test zex::tests::unimplemented_opcode_is_reported_cleanly ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+running 8 tests
+test tests::implemented_set_is_only_the_phase_one_stub ... ok
+test tests::halt_enters_halted_state_and_leaves_flags_unchanged ... ok
+test tests::ld_reads_and_writes_through_hl ... ok
+test tests::nop_advances_pc_and_r_without_changing_registers ... ok
+test tests::ld_register_to_register_preserves_flags ... ok
+test tests::opcode_76_is_halt_not_ld_hl_hl ... ok
+test tests::reset_preserves_memory_and_clears_r_and_halt ... ok
+test tests::unimplemented_opcode_does_not_execute ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+Doc-tests z180_core: 0 passed; 0 failed
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s
+
+> cargo fmt --all --check
+```
+
+The final format check completed successfully with no output.
+
 ## Phase 2 — Full unprefixed opcode page
 
 ## Phase 3 — Prefixed pages, Z180 instructions, TRAP

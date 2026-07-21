@@ -1,4 +1,5 @@
 mod sst;
+mod zex;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -15,10 +16,13 @@ struct Cli {
 enum Command {
     /// Run SingleStepTests JSON conformance cases.
     Sst(sst::SstArgs),
+    /// Run a CP/M ZEX instruction exerciser image.
+    Zex(zex::ZexArgs),
 }
 
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Sst(args) => sst::run(args),
+        Command::Zex(args) => zex::run(args),
     }
 }
