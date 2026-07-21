@@ -756,11 +756,14 @@ Tasks:
    relocation round-trip.
 
 **GATE G5:**
-- `z180-cli sst --dir tests/z180-sst` → 100% PASS including the MMU suite.
-- `cargo test -p z180-core interrupts mmu ioregs` green.
-- `z180-cli sst --dir tests/sst/v1` still 100% (regression check — SST
-  machines run with reset-state MMU, which must still be identity for the
-  covered logical range).
+- `cargo run -p z180-cli -- sst --dir tests/z180-sst` → 100% PASS including
+  the MMU suite.
+- `cargo test -p z180-core interrupts` green.
+- `cargo test -p z180-core mmu` green.
+- `cargo test -p z180-core ioregs` green.
+- `cargo run -p z180-cli -- sst --dir tests/sst/v1` still 100% (regression
+  check — SST machines run with reset-state MMU, which must still be identity
+  for the covered logical range).
 
 ### Phase 6 — On-chip peripherals
 

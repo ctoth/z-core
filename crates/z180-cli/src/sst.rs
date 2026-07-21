@@ -500,7 +500,38 @@ fn run_file(
 
     for case in cases {
         let expected_ports = case.ports.clone().unwrap_or_default();
+        let internal_io_base = if case.kind.is_none() {
+            [0x00_u8, 0x40, 0x80, 0xc0]
+                .into_iter()
+                .find(|base| {
+                    expected_ports.iter().all(|event| {
+                        let [high, low] = event.0.to_be_bytes();
+                        high != 0 || low & 0xc0 != *base
+                    })
+                })
+                .with_context(|| {
+                    format!(
+                        "{} uses external ports in every possible internal-I/O window",
+                        case.name
+                    )
+                })?
+        } else {
+            0
+        };
         let (mut cpu, port_script) = machine(expected_ports, 0x1_0000)?;
+        if internal_io_base != 0 {
+            cpu.mem_poke(0, 0xed);
+            cpu.mem_poke(1, 0x01);
+            cpu.mem_poke(2, 0x3f);
+            cpu.set_reg(Reg::BC, u16::from(internal_io_base) << 8);
+            if cpu.step() == 0 || cpu.io_reg_peek(0x3f) != internal_io_base {
+                bail!(
+                    "failed to relocate the internal-I/O window for {}",
+                    case.name
+                );
+            }
+            port_script.borrow_mut().observed.clear();
+        }
         load_state(&mut cpu, &case.initial)
             .with_context(|| format!("failed to load initial state for {}", case.name))?;
         let sabotage = sabotage_ld.then(|| inject_reversed_ld(&mut cpu)).flatten();
@@ -992,6 +1023,22 @@ mod tests {
         assert_eq!(bus.io_read(0x0040), 0x12);
         bus.io_write(0x0041, 0x34);
         assert!(compare_ports(&script.borrow(), "ports").is_none());
+    }
+
+    #[test]
+    fn standard_sst_relocates_internal_window_away_from_expected_external_port() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/sst/v1/ed 48.json");
+        let case = load_cases(&path)
+            .expect("pinned standard SST file must load")
+            .into_iter()
+            .find(|case| case.name == "ED 48 0041")
+            .expect("pinned low-port standard SST case must exist");
+
+        let report = run_file("ed 48".to_owned(), vec![case], false, false)
+            .expect("standard SST case must execute");
+        assert_eq!(report.pass, 1);
+        assert_eq!(report.fail, 0);
+        assert_eq!(report.unimplemented, 0);
     }
 
     #[test]

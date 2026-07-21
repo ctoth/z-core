@@ -1634,6 +1634,74 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 The format check completed with no output. All four Phase 5 tasks are now
 implemented; Gate G5 is the next unchecked plan item.
 
+### Gate G5 — PASS (2026-07-21)
+
+Gate preflight proved that the original combined Cargo filter was not
+executable (`unexpected argument 'mmu'`) and that no bare `z180-cli` executable
+was installed in this checkout. `PLAN.md` now names three separate Cargo test
+commands and the established `cargo run -p z180-cli -- ...` checkout form.
+
+The first standard-SST run exposed 12 retained failures after 696,988 passes.
+All were IN/INI/IND/INIR/INDR fixtures with B=00h and expected external reads
+inside the reset ICR window at 0000h–003Fh. Direct fixture inspection proved
+the exact ports. The core correctly returned internal-register data and
+ignored the duplicate external read value, as UM0050 requires.
+
+The runner correction does not exclude or special-case results. For each
+standard case, it selects an ICR window unused by that case's expected external
+ports and programs ICR through a real `OUT0 (3Fh),B` before loading the fixture
+state; only the setup duplicate-bus observation is cleared. Generated Z180
+cases retain reset ICR and continue exercising internal I/O. A pinned real
+`ED 48 0041` fixture regression proves the setup, and all nine affected
+families pass 9,000/9,000.
+
+Final workspace/static authority after the correction:
+
+```text
+> cargo test --workspace
+running 18 tests
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+running 42 tests
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+
+> cargo fmt --all -- --check
+```
+
+The exact Gate G5 commands then produced:
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst
+SUMMARY pass=7050 fail=0 unimplemented=0 excluded=0
+
+> cargo test -p z180-core interrupts
+running 6 tests
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.01s
+
+> cargo test -p z180-core mmu
+running 4 tests
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.84s
+
+> cargo test -p z180-core ioregs
+running 6 tests
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s
+
+> cargo run -p z180-cli -- sst --dir tests/sst/v1
+SUMMARY pass=697000 fail=0 unimplemented=0 excluded=907
+```
+
+Every retained standard case passed; the 907 file-level Appendix A exclusions
+are unchanged. Phase 5 and Gate G5 are complete. Phase 6 task 1, PRT0/PRT1,
+is the next unchecked plan item.
+
 ## Phase 6 — On-chip peripherals
 
 ## Phase 7 — Debug, trace, save-state, disassembler
