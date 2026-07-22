@@ -2942,4 +2942,33 @@ RAM-region metadata, events, and instruction traces. P9.2 therefore requires
 the plan's hand-written declaration refinements; those refinements are not
 part of this task.
 
+P9.1 landed as `69137b4`. CI run `29883021468` passed on Ubuntu in 2m09s
+and Windows in 3m56s, including the reference differential gate on both.
+
+### P9.2 — TypeScript declaration refinements
+
+`types/refinements.d.ts` is embedded by wasm-bindgen as the package's custom
+TypeScript section. It replaces only the loose generated `Machine`
+declaration while leaving the JavaScript runtime exports unchanged. The
+public declaration now has strict configuration, callback, region, RAM-region,
+instruction-trace, and method types. `Event` is a discriminated union of the
+exact seven Rust event variants, so each variant exposes only its valid fields.
+
+The committed strict consumer fixture constructs every region shape, uses the
+callback API, consumes typed RAM/trace/event results, exhaustively narrows all
+seven Event variants, and proves a ROM region without data is rejected.
+
+Both package targets compile with the refinements. The strict consumer check
+passes against each generated target:
+
+```text
+> npx --yes --package typescript@5.9.3 tsc --noEmit \
+    --project types/tsconfig.json
+```
+
+The command exits 0 with no diagnostics. The resolved compiler configuration
+has `strict` and every explicitly audited strictness flag enabled. A generated
+declaration search finds exactly one `export class Machine`,
+`drainEvents(): Event[]`, and no `any`.
+
 ## Phase 10 — Documentation and v0.1.0

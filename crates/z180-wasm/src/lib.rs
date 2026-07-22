@@ -13,6 +13,9 @@ use z180_core::{
 const EXT_MAP_TABLE_LEN: usize = 1 << 20;
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
+#[wasm_bindgen(typescript_custom_section)]
+const TYPESCRIPT_REFINEMENTS: &str = include_str!("../types/refinements.d.ts");
+
 struct JsBus {
     unmapped_read: u8,
     mem_read: Option<Function>,
@@ -165,7 +168,7 @@ pub struct WatchId {
     inner: CoreWatchId,
 }
 
-#[wasm_bindgen]
+#[wasm_bindgen(skip_typescript)]
 pub struct Machine {
     inner: Z180<JsBus>,
     callback_error: Rc<RefCell<Option<JsValue>>>,
