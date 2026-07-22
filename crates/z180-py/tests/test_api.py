@@ -104,6 +104,156 @@ def test_config_is_strict_and_defaults_are_usable():
         )
 
 
+def test_machine_callbacks_are_keyword_only_and_internal_ram_bypasses_them():
+    memory_reads = []
+    memory_writes = []
+    machine = z180.Machine(
+        config_dict={"regions": [RAM_4K]},
+        mem_read=lambda address: memory_reads.append(address) or 0xFF,
+        mem_write=lambda address, value: memory_writes.append((address, value)),
+    )
+    ram = machine.ram(0)
+    ram[:5] = b"\x3e\x5a\x32\x08\x00"  # LD A,5Ah; LD (0008h),A
+
+    machine.step()
+    machine.step()
+
+    assert ram[8] == 0x5A
+    assert memory_reads == []
+    assert memory_writes == []
+    with pytest.raises(TypeError, match="positional"):
+        z180.Machine({"regions": [RAM_4K]}, lambda address: 0xFF)
+
+
+def test_flash_aperture_uses_callbacks_and_omissions_keep_defaults():
+    memory_reads = []
+    memory_writes = []
+    machine = z180.Machine(
+        {
+            "unmapped_read": 0xA5,
+            "regions": [
+                RAM_4K,
+                {"base": 0x80000, "size": 0x80000, "kind": "external"},
+            ],
+        },
+        mem_read=lambda address: memory_reads.append(address) or 0xC3,
+        mem_write=lambda address, value: memory_writes.append((address, value)),
+    )
+    ram = machine.ram(0)
+    ram[:18] = bytes(
+        [
+            0x3E,
+            0xF1,  # LD A,F1h
+            0xED,
+            0x39,
+            0x3A,  # OUT0 (CBAR),A: keep page zero common
+            0x3E,
+            0x7F,  # LD A,7Fh
+            0xED,
+            0x39,
+            0x39,  # OUT0 (BBR),A: logical 1000h -> physical 80000h
+            0x3E,
+            0x5A,  # LD A,5Ah
+            0x32,
+            0x00,
+            0x10,  # LD (1000h),A
+            0x3A,
+            0x00,
+            0x10,  # LD A,(1000h)
+        ]
+    )
+
+    for _ in range(7):
+        machine.step()
+
+    assert memory_writes == [(0x80000, 0x5A)]
+    assert memory_reads == [0x80000]
+    assert machine.reg(z180.Reg.AF) >> 8 == 0xC3
+
+    disconnected = z180.Machine(
+        {
+            "unmapped_read": 0xA5,
+            "regions": [
+                RAM_4K,
+                {"base": 0x80000, "size": 0x80000, "kind": "external"},
+            ],
+        }
+    )
+    disconnected.ram(0)[:13] = bytes(
+        [
+            0x3E,
+            0xF1,
+            0xED,
+            0x39,
+            0x3A,
+            0x3E,
+            0x7F,
+            0xED,
+            0x39,
+            0x39,
+            0x3A,
+            0x00,
+            0x10,
+        ]
+    )
+    for _ in range(5):
+        disconnected.step()
+    assert disconnected.reg(z180.Reg.AF) >> 8 == 0xA5
+
+
+def test_external_and_duplicate_internal_io_cycles_use_callbacks():
+    io_reads = []
+    io_writes = []
+    machine = z180.Machine(
+        {"regions": [RAM_4K]},
+        io_read=lambda port: io_reads.append(port) or 0xA5,
+        io_write=lambda port, value: io_writes.append((port, value)),
+    )
+    machine.ram(0)[:12] = bytes(
+        [
+            0xED,
+            0x39,
+            0x40,  # OUT0 (40h),A: external
+            0xED,
+            0x39,
+            0x04,  # OUT0 (STAT0),A: internal plus duplicate cycle
+            0xED,
+            0x38,
+            0x40,  # IN0 A,(40h): external
+            0xED,
+            0x38,
+            0x04,  # IN0 A,(STAT0): internal plus duplicate cycle
+        ]
+    )
+    machine.set_reg(z180.Reg.AF, 0x5A00)
+
+    for _ in range(4):
+        machine.step()
+
+    assert io_writes == [(0x40, 0x5A), (0x04, 0x5A)]
+    assert io_reads == [0x40, 0x04]
+
+
+def test_callback_error_propagates_once_and_does_not_remain_pending():
+    calls = 0
+
+    def mem_read(address):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError(f"read failed at {address:#x}")
+        return 0x00
+
+    machine = z180.Machine(
+        {"regions": [{"base": 0, "size": 0x1000, "kind": "external"}]},
+        mem_read=mem_read,
+    )
+
+    with pytest.raises(RuntimeError, match="read failed at 0x0"):
+        machine.step()
+    assert machine.step() > 0
+
+
 def test_register_lifecycle_interrupt_and_queue_methods():
     machine = machine_with_ram()
     machine.set_reg(z180.Reg.PC, 0x1234)

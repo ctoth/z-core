@@ -2699,7 +2699,79 @@ Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.24s
 25 CLI unit + 2 CLI integration + 89 core tests passed
 ```
 
-P8.2 is complete pending its commit, push, and CI. P8.3 is next after that
+P8.2 landed as `afd0bdc`. CI run `29878130219` passed on Ubuntu in 1m14s
+and Windows in 2m21s.
+
+### P8.3 — qns internal-memory migration
+
+RESOLVED: P8.3 was blocked because public `Machine(config_dict)` could not
+combine internal RAM with qns's external I/O and flash callbacks. Q authorized
+the proposed compatible constructor extension:
+
+`Machine(config_dict=None, *, mem_read=None, mem_write=None, io_read=None,
+io_write=None)`.
+
+The public constructor now reuses the P8.2 `PythonBus`. Memory callbacks run
+only for configured External pages; I/O callbacks run for external I/O and
+required duplicate internal-I/O cycles. Omitted callbacks retain the P8.1
+unmapped-value behavior. The first Python callback exception propagates after
+the active native operation and is then cleared. No new class, adapter,
+dependency, or core API was added.
+
+The Python authorities execute internal RAM without either memory callback,
+program CBAR/BBR so a guest read and write reach qns's physical
+80000h-FFFFFh flash aperture, exercise external and duplicate internal I/O
+cycles, retain omitted-callback defaults, reject positional callbacks, and
+prove callback errors do not remain pending:
+
+```text
+> uv run --project crates/z180-py pytest crates/z180-py/tests -q
+.................                                                        [100%]
+17 passed in 0.36s
+```
+
+`docs/qns-migration.md` is written from the current read-only qns checkout.
+It gives the exact per-profile region layout, ROM-to-core-RAM shadow
+initialization, `qns/memory.py` ownership changes, V1/V2 and state-directory
+conversion, memory-observer/event relocation, callback reentrancy rule,
+serial/CSI queue ordering, and direct `Machine` API substitutions. It records
+the internal-mode target as at least 50M cycles/sec without claiming a P8.3
+measurement; the three measured rates belong to P8.4.
+
+The release abi3 wheel contains the authorized constructor and passes the same
+authority in an isolated Python 3.11 environment:
+
+```text
+> uv run --with maturin maturin build --release --out ../../target/wheels
+Found pyo3 bindings with abi3-py3.11 support
+Finished `release` profile [optimized] target(s) in 2.98s
+Built wheel for abi3 Python >= 3.11 to
+../../target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl
+
+> uv run --refresh-package z180 --isolated --python 3.11 \
+    --with ./target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl \
+    --with pytest pytest crates/z180-py/tests -q
+.................                                                        [100%]
+17 passed in 0.16s
+```
+
+Static and workspace authorities are green. On this machine PyO3 must be
+pointed at the verified 64-bit uv project interpreter; without that variable,
+the PATH-selected 32-bit interpreter fails before project code is checked.
+
+```text
+> cargo fmt --all -- --check
+
+> $env:PYO3_PYTHON =
+    'C:\Users\Q\code\z-core\crates\z180-py\.venv\Scripts\python.exe'
+> cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.27s
+
+> cargo test --workspace
+25 CLI unit + 2 CLI integration + 89 core tests passed
+```
+
+P8.3 is complete pending its commit, push, and CI. P8.4 is next after that
 landing completes.
 
 ## Phase 9 — WASM and TypeScript

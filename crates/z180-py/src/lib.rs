@@ -27,17 +27,6 @@ struct PythonBus {
 }
 
 impl PythonBus {
-    fn disconnected(unmapped_read: u8, callback_error: Arc<Mutex<Option<PyErr>>>) -> Self {
-        Self {
-            unmapped_read,
-            mem_read: None,
-            mem_write: None,
-            io_read: None,
-            io_write: None,
-            callback_error,
-        }
-    }
-
     fn read_callback(callback: &Option<Py<PyAny>>, address: u32) -> PyResult<Option<u8>> {
         let Some(callback) = callback else {
             return Ok(None);
@@ -401,11 +390,24 @@ impl RamView {
 #[pymethods]
 impl Machine {
     #[new]
-    #[pyo3(signature = (config=None))]
-    fn new(config: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let config = parse_config(config)?;
+    #[pyo3(signature = (config_dict=None, *, mem_read=None, mem_write=None, io_read=None, io_write=None))]
+    fn new(
+        config_dict: Option<&Bound<'_, PyDict>>,
+        mem_read: Option<Py<PyAny>>,
+        mem_write: Option<Py<PyAny>>,
+        io_read: Option<Py<PyAny>>,
+        io_write: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        let config = parse_config(config_dict)?;
         let callback_error = Arc::new(Mutex::new(None));
-        let bus = PythonBus::disconnected(config.unmapped_read, Arc::clone(&callback_error));
+        let bus = PythonBus {
+            unmapped_read: config.unmapped_read,
+            mem_read,
+            mem_write,
+            io_read,
+            io_write,
+            callback_error: Arc::clone(&callback_error),
+        };
         let inner = Z180::new(config, bus).map_err(config_error)?;
         Ok(Self {
             inner,
