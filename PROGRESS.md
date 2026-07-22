@@ -2858,8 +2858,42 @@ seen while constructing the harness occurred before or outside semantic
 comparison and were corrected without changing the emulator or independent
 reference transition model.
 
-P8.6 is complete pending this record's commit, push, and CI. G8 is next after
-that landing completes.
+P8.6 landed as `58adbfc`. CI run `29881243370` passed on Ubuntu in 2m04s
+and Windows in 3m37s; both jobs passed the reference differential gate.
+
+### G8 evidence
+
+Windows z180-py tests:
+
+```text
+> uv run --project crates/z180-py pytest crates/z180-py/tests -q
+.................                                                        [100%]
+17 passed in 0.32s
+```
+
+Python execution-mode benchmark:
+
+| Mode | Cycles/sec | Python target |
+|---|---:|---:|
+| z-core compat callbacks | 5,688,119 | informational |
+| z-core internal memory | 234,220,593 | >= 50,000,000 PASS |
+| old qns CFFI | 12,025,694 | informational |
+
+Mandatory reference differential gate:
+
+```text
+> uv run --project tools/reference pytest tools/reference -q \
+    --hypothesis-profile=gate
+......                                                                   [100%]
+6 passed in 54.67s
+```
+
+All three differential properties passed 2,000 examples/property with zero
+surviving counterexamples. Pinned regressions: none.
+
+Optional incumbent status: `NOT RUN: no authorized full-state black-box API`
+
+G8: PASS.
 
 ## Phase 9 — WASM and TypeScript
 
