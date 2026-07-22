@@ -3067,3 +3067,479 @@ P9.3 Node smoke: PASS
 G9: PASS.
 
 ## Phase 10 — Documentation and v0.1.0
+
+### v0.1.0 evidence (2026-07-22)
+
+The final G1..G9 matrix was run in one session. Per Q's correction, an exact
+command already completed successfully in this session was not run again at a
+later gate; the first result is cited wherever the gate matrix repeats it.
+The two sabotage runs are expected negative controls and exited 1 only after
+reporting the required detected failures.
+
+#### G1
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 00,76,40..7f
+PASS 00: pass=1000 fail=0 unimplemented=0
+PASS 40: pass=1000 fail=0 unimplemented=0
+PASS 41: pass=1000 fail=0 unimplemented=0
+PASS 42: pass=1000 fail=0 unimplemented=0
+PASS 43: pass=1000 fail=0 unimplemented=0
+PASS 44: pass=1000 fail=0 unimplemented=0
+PASS 45: pass=1000 fail=0 unimplemented=0
+PASS 46: pass=1000 fail=0 unimplemented=0
+PASS 47: pass=1000 fail=0 unimplemented=0
+PASS 48: pass=1000 fail=0 unimplemented=0
+PASS 49: pass=1000 fail=0 unimplemented=0
+PASS 4a: pass=1000 fail=0 unimplemented=0
+PASS 4b: pass=1000 fail=0 unimplemented=0
+PASS 4c: pass=1000 fail=0 unimplemented=0
+PASS 4d: pass=1000 fail=0 unimplemented=0
+PASS 4e: pass=1000 fail=0 unimplemented=0
+PASS 4f: pass=1000 fail=0 unimplemented=0
+PASS 50: pass=1000 fail=0 unimplemented=0
+PASS 51: pass=1000 fail=0 unimplemented=0
+PASS 52: pass=1000 fail=0 unimplemented=0
+PASS 53: pass=1000 fail=0 unimplemented=0
+PASS 54: pass=1000 fail=0 unimplemented=0
+PASS 55: pass=1000 fail=0 unimplemented=0
+PASS 56: pass=1000 fail=0 unimplemented=0
+PASS 57: pass=1000 fail=0 unimplemented=0
+PASS 58: pass=1000 fail=0 unimplemented=0
+PASS 59: pass=1000 fail=0 unimplemented=0
+PASS 5a: pass=1000 fail=0 unimplemented=0
+PASS 5b: pass=1000 fail=0 unimplemented=0
+PASS 5c: pass=1000 fail=0 unimplemented=0
+PASS 5d: pass=1000 fail=0 unimplemented=0
+PASS 5e: pass=1000 fail=0 unimplemented=0
+PASS 5f: pass=1000 fail=0 unimplemented=0
+PASS 60: pass=1000 fail=0 unimplemented=0
+PASS 61: pass=1000 fail=0 unimplemented=0
+PASS 62: pass=1000 fail=0 unimplemented=0
+PASS 63: pass=1000 fail=0 unimplemented=0
+PASS 64: pass=1000 fail=0 unimplemented=0
+PASS 65: pass=1000 fail=0 unimplemented=0
+PASS 66: pass=1000 fail=0 unimplemented=0
+PASS 67: pass=1000 fail=0 unimplemented=0
+PASS 68: pass=1000 fail=0 unimplemented=0
+PASS 69: pass=1000 fail=0 unimplemented=0
+PASS 6a: pass=1000 fail=0 unimplemented=0
+PASS 6b: pass=1000 fail=0 unimplemented=0
+PASS 6c: pass=1000 fail=0 unimplemented=0
+PASS 6d: pass=1000 fail=0 unimplemented=0
+PASS 6e: pass=1000 fail=0 unimplemented=0
+PASS 6f: pass=1000 fail=0 unimplemented=0
+PASS 70: pass=1000 fail=0 unimplemented=0
+PASS 71: pass=1000 fail=0 unimplemented=0
+PASS 72: pass=1000 fail=0 unimplemented=0
+PASS 73: pass=1000 fail=0 unimplemented=0
+PASS 74: pass=1000 fail=0 unimplemented=0
+PASS 75: pass=1000 fail=0 unimplemented=0
+PASS 76: pass=1000 fail=0 unimplemented=0
+PASS 77: pass=1000 fail=0 unimplemented=0
+PASS 78: pass=1000 fail=0 unimplemented=0
+PASS 79: pass=1000 fail=0 unimplemented=0
+PASS 7a: pass=1000 fail=0 unimplemented=0
+PASS 7b: pass=1000 fail=0 unimplemented=0
+PASS 7c: pass=1000 fail=0 unimplemented=0
+PASS 7d: pass=1000 fail=0 unimplemented=0
+PASS 7e: pass=1000 fail=0 unimplemented=0
+PASS 7f: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=65000 fail=0 unimplemented=0 excluded=0
+```
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 00,76,40..7f --sabotage-ld
+PASS 00: pass=1000 fail=0 unimplemented=0
+PASS 40: pass=1000 fail=0 unimplemented=0
+FAIL 41: pass=9 fail=991 unimplemented=0
+  41 0000: b expected=65 actual=97
+...
+PASS 7f: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=9201 fail=55799 unimplemented=0 excluded=0
+Error: 55799 single-step test(s) failed
+error: process didn't exit successfully: `target\debug\z180-cli.exe sst --dir tests/sst/v1 --only 00,76,40..7f --sabotage-ld` (exit code: 1)
+```
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst --census
+PASS ed00: pass=200 fail=0 unimplemented=0
+PASS ed01: pass=200 fail=0 unimplemented=0
+PASS ed04: pass=200 fail=0 unimplemented=0
+PASS ed08: pass=200 fail=0 unimplemented=0
+PASS ed09: pass=200 fail=0 unimplemented=0
+PASS ed0c: pass=200 fail=0 unimplemented=0
+PASS ed10: pass=200 fail=0 unimplemented=0
+PASS ed11: pass=200 fail=0 unimplemented=0
+PASS ed14: pass=200 fail=0 unimplemented=0
+PASS ed18: pass=200 fail=0 unimplemented=0
+PASS ed19: pass=200 fail=0 unimplemented=0
+PASS ed1c: pass=200 fail=0 unimplemented=0
+PASS ed20: pass=200 fail=0 unimplemented=0
+PASS ed21: pass=200 fail=0 unimplemented=0
+PASS ed24: pass=200 fail=0 unimplemented=0
+PASS ed28: pass=200 fail=0 unimplemented=0
+PASS ed29: pass=200 fail=0 unimplemented=0
+PASS ed2c: pass=200 fail=0 unimplemented=0
+PASS ed30: pass=200 fail=0 unimplemented=0
+PASS ed34: pass=200 fail=0 unimplemented=0
+PASS ed38: pass=200 fail=0 unimplemented=0
+PASS ed39: pass=200 fail=0 unimplemented=0
+PASS ed3c: pass=200 fail=0 unimplemented=0
+PASS ed4c: pass=200 fail=0 unimplemented=0
+PASS ed5c: pass=200 fail=0 unimplemented=0
+PASS ed64: pass=200 fail=0 unimplemented=0
+PASS ed6c: pass=200 fail=0 unimplemented=0
+PASS ed74: pass=200 fail=0 unimplemented=0
+PASS ed76: pass=200 fail=0 unimplemented=0
+PASS ed7c: pass=200 fail=0 unimplemented=0
+PASS ed83: pass=200 fail=0 unimplemented=0
+PASS ed8b: pass=200 fail=0 unimplemented=0
+PASS ed93: pass=200 fail=0 unimplemented=0
+PASS ed9b: pass=200 fail=0 unimplemented=0
+PASS mmu: pass=200 fail=0 unimplemented=0
+PASS trap: pass=50 fail=0 unimplemented=0
+CENSUS ed00=200
+CENSUS ed01=200
+CENSUS ed04=200
+CENSUS ed08=200
+CENSUS ed09=200
+CENSUS ed0c=200
+CENSUS ed10=200
+CENSUS ed11=200
+CENSUS ed14=200
+CENSUS ed18=200
+CENSUS ed19=200
+CENSUS ed1c=200
+CENSUS ed20=200
+CENSUS ed21=200
+CENSUS ed24=200
+CENSUS ed28=200
+CENSUS ed29=200
+CENSUS ed2c=200
+CENSUS ed30=200
+CENSUS ed34=200
+CENSUS ed38=200
+CENSUS ed39=200
+CENSUS ed3c=200
+CENSUS ed4c=200
+CENSUS ed5c=200
+CENSUS ed64=200
+CENSUS ed6c=200
+CENSUS ed74=200
+CENSUS ed76=200
+CENSUS ed7c=200
+CENSUS ed83=200
+CENSUS ed8b=200
+CENSUS ed93=200
+CENSUS ed9b=200
+CENSUS mmu=200
+CENSUS trap=50
+CENSUS total=7050
+SUMMARY pass=7050 fail=0 unimplemented=0 excluded=0
+```
+
+The stock ZEXDOC command reached the UM0050-undefined IXH family and failed
+with the required explicit TRAP diagnostic:
+
+```text
+> cargo run -p z180-cli -- zex tests/vendor/zex/zexdoc.com
+Z80 instruction exerciser
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
+add hl,<bc,de,hl,sp>..........  OK
+add ix,<bc,de,ix,sp>..........  OK
+add iy,<bc,de,iy,sp>..........  OK
+aluop a,nn....................  OK
+aluop a,<b,c,d,e,h,l,(hl),a>..  OK
+Error: aluop a,<ixh,ixl,iyh,iyl>.....Z180 TRAP at cycle 44803554798, PC=1d42: opcode=[dd, 84, 00], len=2
+error: process didn't exit successfully: `target\debug\z180-cli.exe zex tests/vendor/zex/zexdoc.com` (exit code: 1)
+```
+
+#### G2 and G3
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1
+SUMMARY pass=697000 fail=0 unimplemented=0 excluded=907
+```
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/sst/v1 --only 40..7f --sabotage-ld
+FAIL 41: pass=9 fail=991 unimplemented=0
+  41 0000: b expected=65 actual=97
+...
+PASS 7f: pass=1000 fail=0 unimplemented=0
+SUMMARY pass=8201 fail=55799 unimplemented=0 excluded=0
+Error: 55799 single-step test(s) failed
+```
+
+```text
+> cargo run -p z180-cli -- sst --dir tests/z180-sst
+SUMMARY pass=7050 fail=0 unimplemented=0 excluded=0
+```
+
+```text
+> cargo test -p z180-core trap
+running 3 tests
+test tests::insn_trace_records_fetched_bytes_physical_pc_and_traps_without_extra_reads ... ok
+test tests::undefined_third_opcode_takes_trap_with_ufo ... ok
+test tests::undefined_second_opcode_takes_trap ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 80 filtered out
+```
+
+G3's repeated full standard-SST command uses the first G2 result above.
+
+#### G4
+
+```text
+> cargo test -p z180-core timing
+running 8 tests
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 75 filtered out
+```
+
+```text
+> cargo run -p z180-cli -- zex tests/vendor/zex/zexdoc-z180.com
+Z80 instruction exerciser
+<adc,sbc> hl,<bc,de,hl,sp>....  OK
+add hl,<bc,de,hl,sp>..........  OK
+add ix,<bc,de,ix,sp>..........  OK
+add iy,<bc,de,iy,sp>..........  OK
+aluop a,nn....................  OK
+aluop a,<b,c,d,e,h,l,(hl),a>..  OK
+aluop a,(<ix,iy>+1)...........  OK
+bit n,(<ix,iy>+1).............  OK
+bit n,<b,c,d,e,h,l,(hl),a>....  OK
+cpd<r>........................  OK
+cpi<r>........................  OK
+<daa,cpl,scf,ccf>.............  OK
+<inc,dec> a...................  OK
+<inc,dec> b...................  OK
+<inc,dec> bc..................  OK
+<inc,dec> c...................  OK
+<inc,dec> d...................  OK
+<inc,dec> de..................  OK
+<inc,dec> e...................  OK
+<inc,dec> h...................  OK
+<inc,dec> hl..................  OK
+<inc,dec> ix..................  OK
+<inc,dec> iy..................  OK
+<inc,dec> l...................  OK
+<inc,dec> (hl)................  OK
+<inc,dec> sp..................  OK
+<inc,dec> (<ix,iy>+1).........  OK
+ld <bc,de>,(nnnn).............  OK
+ld hl,(nnnn)..................  OK
+ld sp,(nnnn)..................  OK
+ld <ix,iy>,(nnnn).............  OK
+ld (nnnn),<bc,de>.............  OK
+ld (nnnn),hl..................  OK
+ld (nnnn),sp..................  OK
+ld (nnnn),<ix,iy>.............  OK
+ld <bc,de,hl,sp>,nnnn.........  OK
+ld <ix,iy>,nnnn...............  OK
+ld a,<(bc),(de)>..............  OK
+ld <b,c,d,e,h,l,(hl),a>,nn....  OK
+ld (<ix,iy>+1),nn.............  OK
+ld <b,c,d,e>,(<ix,iy>+1)......  OK
+ld <h,l>,(<ix,iy>+1)..........  OK
+ld a,(<ix,iy>+1)..............  OK
+ld <bcdehla>,<bcdehla>........  OK
+ld a,(nnnn) / ld (nnnn),a.....  OK
+ldd<r> (1)....................  OK
+ldd<r> (2)....................  OK
+ldi<r> (1)....................  OK
+ldi<r> (2)....................  OK
+neg...........................  OK
+<rrd,rld>.....................  OK
+<rlca,rrca,rla,rra>...........  OK
+<set,res> n,<bcdehl(hl)a>.....  OK
+<set,res> n,(<ix,iy>+1).......  OK
+ld (<ix,iy>+1),<b,c,d,e>......  OK
+ld (<ix,iy>+1),<h,l>..........  OK
+ld (<ix,iy>+1),a..............  OK
+ld (<bc,de>),a................  OK
+Tests complete
+```
+
+#### G5
+
+The G5 Z180 and standard SST commands use the successful G3 and G2 results
+above. The remaining distinct commands produced:
+
+```text
+> cargo test -p z180-core interrupts
+running 8 tests
+test tests::dma_dstat_enable_protocol_and_level_interrupts_match_um0050 ... ok
+test tests::ei_shadow_lasts_through_exactly_the_following_instruction ... ok
+test tests::interrupts_nmi_is_edge_latched_and_preserves_iff1_in_iff2 ... ok
+test tests::interrupts_vector_through_i_il_in_um0050_priority_order ... ok
+test tests::interrupts_int0_modes_use_fixed_ff_acknowledge_data ... ok
+test tests::interrupts_halt_and_sleep_follow_distinct_wake_rules ... ok
+test tests::peripheral_interrupts_vector_in_every_adjacent_priority_pair ... ok
+test tests::interrupts_vector_dispatch_matrix_covers_every_source_gate_and_iff_state ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 75 filtered out
+```
+
+```text
+> cargo test -p z180-core mmu
+running 5 tests
+test tests::mmu_boundary_cases_cover_empty_regions_and_one_mibibyte_wrap ... ok
+test tests::mmu_translates_instruction_fetches_reads_and_writes ... ok
+test tests::mmu_reset_and_internal_io_writes_recompute_all_pages ... ok
+test tests::external_mapper_function_and_table_apply_after_mmu_translation ... ok
+test tests::mmu_translation_array_matches_closed_form ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 78 filtered out
+```
+
+```text
+> cargo test -p z180-core ioregs
+running 6 tests
+test tests::ioregs_icr_relocation_round_trip_uses_each_active_window ... ok
+test tests::ioregs_decode_relocation_and_duplicate_bus_cycles_match_um0050 ... ok
+test tests::ioregs_in0_tstio_and_otim_use_internal_data_and_duplicate_the_bus ... ok
+test tests::ioregs_reset_masks_and_variants_match_um0050 ... ok
+test tests::ioregs_write_masks_and_special_effects_match_um0050 ... ok
+test tests::ioregs_internal_cycles_do_not_receive_external_io_waits ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 77 filtered out
+```
+
+#### G6
+
+```text
+> cargo test -p z180-core
+running 83 tests
+test result: ok. 83 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+Doc-tests z180_core
+running 0 tests
+test result: ok. 0 passed; 0 failed
+```
+
+```text
+> cargo test -p z180-core --features state determinism_timer_asci_dma_matches_after_ten_million_cycles -- --nocapture
+running 1 test
+test tests::determinism_timer_asci_dma_matches_after_ten_million_cycles ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.72s
+```
+
+G6's combined standard/Z180 SST line consists of the two exact commands whose
+successful first results are recorded under G2/G3.
+
+#### G7
+
+The first workspace attempt stopped before tests because PATH selected a
+32-bit Python for the 64-bit Rust target:
+
+```text
+error: your Rust target architecture (64-bit) does not match your python interpreter (32-bit)
+```
+
+`uv python list` identified the installed CPython 3.13.5 x86_64 interpreter.
+With `PYO3_PYTHON` pinned to it, the unchanged gate command passed:
+
+```text
+> cargo test --workspace
+z180-cli unit tests: 25 passed; 0 failed
+z180-cli dis integration: 1 passed; 0 failed
+z180-cli run integration: 1 passed; 0 failed
+z180-core: 89 passed; 0 failed
+z180-wasm: 0 passed; 0 failed
+z180-py: 0 passed; 0 failed
+Doc-tests z180_wasm: 0 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+```
+
+```text
+> cargo test -p z180-cli disassembler_golden_covers_every_mnemonic_once -- --nocapture
+running 1 test
+test dis::tests::disassembler_golden_covers_every_mnemonic_once ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out
+```
+
+```text
+> cargo test -p z180-core --features state save_load_resume_demonstration_transcript -- --nocapture
+running 1 test
+SAVE cycle=6 pc=0002 af=1234 state_bytes=66013
+DIVERGE cycle=3 pc=0001 af=A55A
+LOAD cycle=6 pc=0002 af=1234
+UNINTERRUPTED cycle=15 pc=0005 af=1234
+RESUMED cycle=15 pc=0005 af=1234
+MATCH state_bytes=true
+test tests::save_load_resume_demonstration_transcript ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 88 filtered out
+```
+
+#### G8
+
+```text
+> uv run --project crates/z180-py pytest crates/z180-py/tests -q
+.................                                                        [100%]
+17 passed in 0.14s
+```
+
+The qns benchmark command was run from the z-core root so its relative wheel
+path resolves to the P8 wheel:
+
+```text
+> uv run --project C:\Users\Q\code\qns --with ./target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl python bench.py
+mode                 budget       median seconds       cycles/sec
+-------------------  -----------  -----------------  ---------------
+compat callback        1,600,000           0.290709        5,503,798
+internal memory      102,400,000           0.369020      277,491,891
+old CFFI               6,400,000           0.433568       14,761,244
+```
+
+Internal-memory mode exceeds the required 50,000,000 cycles/second target.
+
+```text
+> uv run --project tools/reference pytest tools/reference -q --hypothesis-profile=gate
+......                                                                   [100%]
+6 passed in 40.99s
+```
+
+The three differential properties passed at 2,000 examples/property with
+zero surviving counterexamples and no pinned semantic regressions. Optional
+incumbent status remains exactly:
+
+```text
+NOT RUN: no authorized full-state black-box API
+```
+
+#### G9
+
+```text
+> wasm-pack build --target web --scope zcore
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+    Finished `release` profile [optimized] target(s) in 0.09s
+[INFO]: Installing wasm-bindgen...
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: :-) Done in 1.45s
+[INFO]: :-) Your wasm pkg is ready to publish at C:\Users\Q\code\z-core\crates\z180-wasm\pkg.
+```
+
+```text
+> wasm-pack build --target nodejs --scope zcore
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+    Finished `release` profile [optimized] target(s) in 0.09s
+[INFO]: Installing wasm-bindgen...
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: :-) Done in 1.42s
+[INFO]: :-) Your wasm pkg is ready to publish at C:\Users\Q\code\z-core\crates\z180-wasm\pkg.
+```
+
+```text
+> node tests/node-smoke.cjs
+Fibonacci registers: BC=3759 A=59 DE=0000
+Cycles consumed: 1000012
+Elapsed seconds: 0.006574
+Cycles/second: 152,123,157
+Target: 25,000,000 cycles/second
+P9.3 Node smoke: PASS
+```
+
+All distinct G1..G9 commands are green, including the expected-failing
+negative controls. Exact duplicates were deliberately not rerun. P10.4 is
+complete.
