@@ -3,5 +3,6 @@ members = [
     "crates/z180-cli",
     "crates/z180-core",
     "crates/z180-py",
+    "crates/z180-wasm",
 ]
 resolver = "3"

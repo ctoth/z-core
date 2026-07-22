@@ -1,0 +1,18 @@
+[package]
+name = "z180"
+version = "0.1.0"
+edition = "2024"
+description = "WebAssembly bindings for the z-core Z180 emulator"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ctoth/z-core"
+publish = false
+
+[lib]
+name = "z180_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+js-sys = "0.3.103"
+serde-wasm-bindgen = "0.6.5"
+wasm-bindgen = "0.2.126"
+z180-core = { path = "../z180-core", features = ["state"] }

@@ -2897,4 +2897,49 @@ G8: PASS.
 
 ## Phase 9 — WASM and TypeScript
 
+### P9.1 — wasm-bindgen wrapper
+
+BLOCKED: Q has not decided the final JavaScript package name. Phase 9 uses
+the plan's exact build placeholder `@zcore/z180`; final package naming remains
+blocked until Q supplies that decision.
+
+`crates/z180-wasm` wraps the same `z180_core::Z180` API for JavaScript with
+typed register, interrupt-line, and watch-kind enums; strict machine/region
+configuration; host callbacks; core-owned RAM access; debug/events/traces;
+and state save/load. The generated package metadata names the plan placeholder
+exactly as `@zcore/z180`.
+
+Web package build:
+
+```text
+> wasm-pack build --target web --scope zcore
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+    Finished `release` profile [optimized] target(s) in 0.12s
+[INFO]: Installing wasm-bindgen...
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: :-) Done in 4.55s
+[INFO]: :-) Your wasm pkg is ready to publish at C:\Users\Q\code\z-core\crates\z180-wasm\pkg.
+```
+
+Node.js package build:
+
+```text
+> wasm-pack build --target nodejs --scope zcore
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+    Finished `release` profile [optimized] target(s) in 0.12s
+[INFO]: Installing wasm-bindgen...
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: :-) Done in 1.75s
+[INFO]: :-) Your wasm pkg is ready to publish at C:\Users\Q\code\z-core\crates\z180-wasm\pkg.
+```
+
+The generated declarations expose `any` for machine configuration,
+RAM-region metadata, events, and instruction traces. P9.2 therefore requires
+the plan's hand-written declaration refinements; those refinements are not
+part of this task.
+
 ## Phase 10 — Documentation and v0.1.0
