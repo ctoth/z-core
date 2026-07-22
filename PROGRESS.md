@@ -2771,7 +2771,35 @@ Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.27s
 25 CLI unit + 2 CLI integration + 89 core tests passed
 ```
 
-P8.3 is complete pending its commit, push, and CI. P8.4 is next after that
+P8.3 landed as `0e78551`. CI run `29879478732` passed on Ubuntu in 1m15s
+and Windows in 2m12s.
+
+### P8.4 — Python execution-mode benchmark
+
+The root `bench.py` runs the same all-NOP instruction loop in the three
+required modes. Each mode calibrates to a sample of at least 250ms, then
+reports the median of five samples. The benchmark used the P8.3 release abi3
+wheel and qns's current compiled old-CFFI binding; `CFFI_AVAILABLE` was
+verified true before the run.
+
+```text
+> uv run --project C:\Users\Q\code\qns \
+    --with ./target/wheels/z180-0.1.0-cp311-abi3-win_amd64.whl \
+    python bench.py
+mode                 budget       median seconds       cycles/sec
+-------------------  -----------  -----------------  ---------------
+compat callback        1,600,000           0.281288        5,688,119
+internal memory      102,400,000           0.437195      234,220,593
+old CFFI               3,200,000           0.266097       12,025,694
+```
+
+| Mode | Cycles/sec | Python target |
+|---|---:|---:|
+| z-core compat callbacks | 5,688,119 | informational |
+| z-core internal memory | 234,220,593 | >= 50,000,000 PASS |
+| old qns CFFI | 12,025,694 | informational |
+
+P8.4 is complete pending its commit, push, and CI. P8.5 is next after that
 landing completes.
 
 ## Phase 9 — WASM and TypeScript
