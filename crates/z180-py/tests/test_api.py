@@ -316,6 +316,22 @@ def test_ram_memoryview_is_writable_zero_copy_and_guards_storage_replacement():
         machine.ram(0)
 
 
+def test_separate_nonzero_base_ram_region_is_exposed():
+    machine = z180.Machine(
+        {
+            "regions": [
+                {"base": 0, "size": 0x1000, "kind": "ram"},
+                {"base": 0x4000, "size": 0x1000, "kind": "ram"},
+            ]
+        }
+    )
+
+    view = machine.ram(0x4000)
+    assert len(view) == 0x1000
+    view[0] = 0x5A
+    assert machine.mem_peek(0x4000) == 0x5A
+
+
 def test_external_mapper_is_complete_and_failed_sampling_is_atomic():
     machine = z180.Machine(
         {"regions": [{"base": 0x1000, "size": 0x1000, "kind": "ram"}]}

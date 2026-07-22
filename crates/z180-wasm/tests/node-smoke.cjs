@@ -16,6 +16,22 @@ assert.ok(program.length <= ROM_SIZE, "Fibonacci program must fit in one ROM pag
 const rom = new Uint8Array(ROM_SIZE);
 rom.set(program);
 
+const splitRamMachine = new Machine({
+    regions: [
+        { base: 0x00000, size: 0x01000, kind: "ram" },
+        { base: 0x04000, size: 0x01000, kind: "ram" },
+    ],
+});
+try {
+    assert.equal(
+        splitRamMachine.ram(0x04000).length,
+        0x01000,
+        "a separate nonzero-base RAM region must be exposed",
+    );
+} finally {
+    splitRamMachine.free();
+}
+
 const machine = new Machine({
     regions: [
         { base: 0x00000, size: ROM_SIZE, kind: "rom", data: rom },

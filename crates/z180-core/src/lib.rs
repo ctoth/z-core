@@ -3578,6 +3578,11 @@ mod tests {
             .expect("the first RAM region must be exposed")
             .as_ptr();
         assert_eq!(cpu.ram_regions(), vec![(0, 0x3000), (0x4000, 0x1000)]);
+        assert_eq!(
+            cpu.ram_region(0x4000).map(<[u8]>::len),
+            Some(0x1000),
+            "a separate nonzero-base RAM region must be exposed"
+        );
         cpu.remap(0, 0, RegionKind::Ram)
             .expect("a zero-sized remap must be a no-op");
         assert_eq!(

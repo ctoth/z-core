@@ -395,10 +395,11 @@ impl Memory {
             return None;
         };
         if first_page != 0
+            && let Some(previous_offset) = offset.checked_sub(PAGE_SIZE as usize)
             && self.pages[first_page - 1]
                 == (Page::Ram {
                     store,
-                    offset: offset.checked_sub(PAGE_SIZE as usize)?,
+                    offset: previous_offset,
                 })
         {
             return None;
