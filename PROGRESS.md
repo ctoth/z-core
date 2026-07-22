@@ -3004,4 +3004,66 @@ Target: 25,000,000 cycles/second
 P9.3 Node smoke: PASS
 ```
 
+P9.3 landed as `616a220`. CI run `29885170944` passed on Ubuntu in 2m16s
+and Windows in 3m30s, including the reference differential gate on both.
+
+### P9.4 — Static browser demo
+
+`crates/z180-wasm/demo/` is a framework-free static page. It loads a selected
+ROM into a page-aligned core-owned ROM region, runs a user-selected cycle
+budget, prints every public register, and drains both ASCI transmit queues as
+text. It imports the generated web package directly from `pkg/`; no browser
+framework or package dependency was added.
+
+The web package and demo module built and parsed successfully. A local static
+server plus headless Chrome requested `demo/index.html`, `demo/demo.js`,
+`pkg/z180_wasm.js`, and `pkg/z180_wasm_bg.wasm` successfully.
+
+P9.4 landed as `b411248`. CI run `29885634160` passed on Ubuntu in 2m11s
+and Windows in 5m11s, including the reference differential gate on both.
+
+### G9 evidence
+
+Web package build:
+
+```text
+> wasm-pack build --target web --scope zcore
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+    Finished `release` profile [optimized] target(s) in 0.08s
+[INFO]: Installing wasm-bindgen...
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: :-) Done in 1.46s
+[INFO]: :-) Your wasm pkg is ready to publish at C:\Users\Q\code\z-core\crates\z180-wasm\pkg.
+```
+
+Node.js package build:
+
+```text
+> wasm-pack build --target nodejs --scope zcore
+[INFO]: Checking for the Wasm target...
+[INFO]: Compiling to Wasm...
+    Finished `release` profile [optimized] target(s) in 0.08s
+[INFO]: Installing wasm-bindgen...
+[INFO]: Optimizing wasm binaries with `wasm-opt`...
+[INFO]: License key is set in Cargo.toml but no LICENSE file(s) were found; Please add the LICENSE file(s) to your project directory
+[INFO]: :-) Done in 1.31s
+[INFO]: :-) Your wasm pkg is ready to publish at C:\Users\Q\code\z-core\crates\z180-wasm\pkg.
+```
+
+Node Fibonacci smoke and performance gate:
+
+```text
+> node tests/node-smoke.cjs
+Fibonacci registers: BC=3759 A=59 DE=0000
+Cycles consumed: 1000012
+Elapsed seconds: 0.005075
+Cycles/second: 197,038,934
+Target: 25,000,000 cycles/second
+P9.3 Node smoke: PASS
+```
+
+G9: PASS.
+
 ## Phase 10 — Documentation and v0.1.0
