@@ -2799,8 +2799,24 @@ old CFFI               3,200,000           0.266097       12,025,694
 | z-core internal memory | 234,220,593 | >= 50,000,000 PASS |
 | old qns CFFI | 12,025,694 | informational |
 
-P8.4 is complete pending its commit, push, and CI. P8.5 is next after that
-landing completes.
+P8.4 landed as `12350be`. CI run `29879817022` passed on Ubuntu in 1m11s
+and Windows in 2m9s.
+
+### P8.5 — optional incumbent lockstep
+
+NOT RUN: no authorized full-state black-box API
+
+The current public `qns.cpu.Z180` wrapper can capture the six named registers,
+but it exposes no register setter and no complete CPU state load/save API. ROM
+and callback wiring alone cannot establish identical starting CPU state: a
+diagnostic first `DI` instruction left all other compared fields equal while
+the incumbent reported reset AF=0040h and z-core reported AF=0000h. Since DI
+does not initialize AF, that is an initial-state difference, not an
+instruction divergence. No incumbent source was read, no adjudication claim
+was made, and the non-qualifying diagnostic harness was discarded.
+
+P8.5 is complete pending its record commit, push, and CI. P8.6 is next after
+that landing completes.
 
 ## Phase 9 — WASM and TypeScript
 
