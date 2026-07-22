@@ -2971,4 +2971,37 @@ has `strict` and every explicitly audited strictness flag enabled. A generated
 declaration search finds exactly one `export class Machine`,
 `drainEvents(): Event[]`, and no `any`.
 
+P9.2 landed as `8569825`. CI run `29883636638` passed on Ubuntu in 2m17s
+and Windows in 3m44s, including the reference differential gate on both.
+
+### P9.3 — Node Fibonacci smoke and performance
+
+The 15-byte `tests/fibonacci.bin` ROM is assembled from the committed
+`tests/fibonacci.asm` source with qns's already installed, SHA-locked z88dk
+2.4 toolchain:
+
+```text
+> z88dk-z80asm -mz180 -b -o=fibonacci.bin fibonacci.asm
+```
+
+The assembler exits 0. ROM SHA-256:
+`a6ebaf4c43c2b81d04b5f6f33277f0705b51c8e6325fc040291e81709098bfef`.
+The package has no runtime dependency on qns or z88dk; the committed binary
+lets the Node smoke run directly after `wasm-pack build --target nodejs`.
+
+The ROM computes ten Fibonacci iterations, leaving B=55, C=89, A=89, and
+D=0, then spins without mutating those registers. The smoke loads it into a
+core-owned ROM page, runs the exact one-million-cycle budget, asserts those
+register results, and applies the Section 1.3 WASM target:
+
+```text
+> node tests\node-smoke.cjs
+Fibonacci registers: BC=3759 A=59 DE=0000
+Cycles consumed: 1000012
+Elapsed seconds: 0.005334
+Cycles/second: 187,492,875
+Target: 25,000,000 cycles/second
+P9.3 Node smoke: PASS
+```
+
 ## Phase 10 — Documentation and v0.1.0
