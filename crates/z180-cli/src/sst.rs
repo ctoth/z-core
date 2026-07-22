@@ -9,7 +9,7 @@ use std::rc::Rc;
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use z180_core::{HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180};
+use z180_core::{Event, HostBus, MachineConfig, Reg, RegionDef, RegionKind, WatchKind, Z180};
 
 use policy::{OnlyFilter, exclusion_reason, opcode_bytes};
 
@@ -534,6 +534,7 @@ fn run_file(
         }
         load_state(&mut cpu, &case.initial)
             .with_context(|| format!("failed to load initial state for {}", case.name))?;
+        let _ = cpu.add_mem_watch(0, 0x1_0000, WatchKind::Write);
         let sabotage = sabotage_ld.then(|| inject_reversed_ld(&mut cpu)).flatten();
         let cycles = cpu.step();
         if let Some(sabotage) = sabotage {
@@ -544,7 +545,33 @@ fn run_file(
             continue;
         }
 
+        let write_failure = if cpu.events_lost() {
+            Some(Failure {
+                test: case.name.clone(),
+                field: "ram.writes".to_owned(),
+                expected: "complete write event set".to_owned(),
+                actual: "event overflow".to_owned(),
+            })
+        } else {
+            cpu.drain_events().into_iter().find_map(|event| {
+                let Event::MemWrite { phys, val, .. } = event else {
+                    return None;
+                };
+                (!case
+                    .final_state
+                    .ram
+                    .iter()
+                    .any(|[address, _]| u32::from(*address) == phys))
+                .then(|| Failure {
+                    test: case.name.clone(),
+                    field: format!("ram[{phys:04x}]"),
+                    expected: "<unchanged>".to_owned(),
+                    actual: format!("{val:02x}"),
+                })
+            })
+        };
         let failure = compare(&cpu, &case, ignore_r)
+            .or(write_failure)
             .or_else(|| compare_ports(&port_script.borrow(), &case.name));
         if let Some(failure) = failure {
             file_report.fail += 1;
@@ -1104,6 +1131,28 @@ mod tests {
 
         let failure = compare(&cpu, &case, false).expect("ITC mismatch must fail");
         assert_eq!(failure.field, "z180.itc");
+    }
+
+    #[test]
+    fn standard_sst_rejects_a_write_omitted_from_final_ram() {
+        let mut initial = zero_state();
+        initial.a = 0x5a;
+        initial.h = 0x20;
+        initial.ram = vec![[0x0000, 0x77]];
+        let mut final_state = zero_state();
+        final_state.a = 0x5a;
+        final_state.h = 0x20;
+        final_state.ram = vec![[0x0000, 0x77]];
+        final_state.pc = 1;
+        final_state.r = 1;
+        let mut case = standard_case("stray write", final_state);
+        case.initial = initial;
+
+        let report = run_file("stray-write".to_owned(), vec![case], false, false)
+            .expect("standard SST case must execute");
+        assert_eq!(report.pass, 0);
+        assert_eq!(report.fail, 1);
+        assert_eq!(report.failures[0].field, "ram[2000]");
     }
 
     #[test]
