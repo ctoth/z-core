@@ -1062,12 +1062,18 @@ mod tests {
 
     #[test]
     fn standard_sst_relocates_internal_window_away_from_expected_external_port() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/sst/v1/ed 48.json");
-        let case = load_cases(&path)
-            .expect("pinned standard SST file must load")
-            .into_iter()
-            .find(|case| case.name == "ED 48 0041")
-            .expect("pinned low-port standard SST case must exist");
+        let mut initial = zero_state();
+        initial.c = 0x13;
+        initial.ram = vec![[0x0000, 0xed], [0x0001, 0x48]];
+        let mut final_state = zero_state();
+        final_state.c = 0xd5;
+        final_state.f = 0x80;
+        final_state.r = 2;
+        final_state.pc = 2;
+        final_state.ram = initial.ram.clone();
+        let mut case = standard_case("IN C,(C) at low external port", final_state);
+        case.initial = initial;
+        case.ports = Some(vec![PortEvent(0x0013, 0xd5, PortDirection::R)]);
 
         let report = run_file("ed 48".to_owned(), vec![case], false, false)
             .expect("standard SST case must execute");

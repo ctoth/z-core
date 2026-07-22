@@ -63,9 +63,13 @@ cargo run -p z180-cli -- sst --dir tests/z180-sst --census
 Run the two instruction corpora:
 
 ```powershell
+git submodule update --init
 cargo run -p z180-cli -- sst --dir tests/sst/v1
 cargo run -p z180-cli -- sst --dir tests/z180-sst
 ```
+
+Only the standard corpus under `tests/sst` is a submodule; the Z180-specific
+corpus under `tests/z180-sst` is checked into this repository.
 
 The `zex` subcommand runs the repository's pinned CP/M exerciser artifacts.
 Use `cargo run -p z180-cli -- --help` or append `--help` to a subcommand for

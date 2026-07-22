@@ -18,6 +18,14 @@ Run the workspace tests:
 cargo test --workspace
 ```
 
+The workspace tests are self-contained. To run the external standard SST
+conformance corpus as well, initialize its pinned submodule first:
+
+```powershell
+git submodule update --init
+cargo run -p z180-cli -- sst --dir tests/sst/v1
+```
+
 Disassemble the included every-mnemonic fixture:
 
 ```powershell
