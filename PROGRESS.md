@@ -3600,3 +3600,31 @@ Doc-tests z180_core: 0 passed; 0 failed
 ```
 
 P10.5: PASS.
+
+### Gate G10 — PASS (2026-07-22)
+
+The `v0.1.0 evidence` block above contains every distinct G1..G9 command and
+result from the final session, with repeated exact commands cited to their
+first successful result per Q's correction. P10.5's final sweep, exact
+pedantic command, formatting check, and full workspace test are also recorded.
+
+```text
+> git tag --list v0.1.0
+v0.1.0
+```
+
+The task commits immediately preceding this gate are:
+
+```text
+a6878dc P10.5: finish release cleanup
+782e5d1 P10.4: record v0.1.0 matrix
+ca3af18 (tag: v0.1.0) P10.3: prepare v0.1.0 release
+7b854cf P10.2: add runnable crate guides
+f7fff98 P10.1: document as-built architecture
+```
+
+GitHub Actions run `29893414532` is green on P10.5: Ubuntu completed in
+2m14s and Windows in 2m46s. Both jobs passed formatting, default and state
+Clippy, default and state tests, and the reference differential gate.
+
+G10: PASS. Phase 10 and the complete v0.1.0 plan are complete.
