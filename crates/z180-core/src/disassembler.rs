@@ -1,4 +1,5 @@
 use alloc::{format, string::String, string::ToString};
+use core::fmt::Write as _;
 
 use crate::{
     HostBus, Z180,
@@ -38,6 +39,7 @@ enum OpcodePage {
     IndexCb { iy: bool },
 }
 
+#[must_use]
 pub fn disassemble_one(bytes: &[u8], address: u16) -> Option<DisassembledInstruction> {
     let first = *bytes.first()?;
     let decoded = decode(bytes);
@@ -59,7 +61,7 @@ pub fn disassemble_one(bytes: &[u8], address: u16) -> Option<DisassembledInstruc
         address,
         bytes: encoded,
         len,
-        text: format_instruction(descriptor, opcode, page, &encoded, address),
+        text: format_instruction(descriptor, opcode, page, encoded, address),
     })
 }
 
@@ -117,7 +119,7 @@ fn format_instruction(
     descriptor: Opcode<DisassemblyBus>,
     opcode: u8,
     page: OpcodePage,
-    bytes: &[u8; 4],
+    bytes: [u8; 4],
     address: u16,
 ) -> String {
     const REG8: [&str; 8] = ["B", "C", "D", "E", "H", "L", "(HL)", "A"];
@@ -167,16 +169,16 @@ fn format_instruction(
     text = text.replace("{alu} A", ALU[usize::from((opcode >> 3) & 0x07)]);
 
     if has_operand(descriptor.operands, OperandKind::IndirectIndex) {
-        let displacement = bytes[2] as i8;
+        let displacement = bytes[2].cast_signed();
         let rendered = if displacement < 0 {
             format!("-{:02X}h", displacement.unsigned_abs())
         } else {
-            format!("+{:02X}h", displacement as u8)
+            format!("+{:02X}h", displacement.cast_unsigned())
         };
         text = text.replace("+{d}", &rendered);
     }
     if has_operand(descriptor.operands, OperandKind::Relative8) {
-        let displacement = bytes[usize::from(descriptor.length - 1)] as i8;
+        let displacement = bytes[usize::from(descriptor.length - 1)].cast_signed();
         let target = address
             .wrapping_add(u16::from(descriptor.length))
             .wrapping_add_signed(i16::from(displacement));
@@ -215,7 +217,7 @@ fn data_bytes(address: u16, source: &[u8]) -> DisassembledInstruction {
         if index != 0 {
             text.push(',');
         }
-        text.push_str(&format!("{byte:02X}h"));
+        let _ = write!(text, "{byte:02X}h");
     }
     DisassembledInstruction {
         address,
@@ -283,33 +285,33 @@ mod tests {
     #[test]
     fn every_implemented_optable_entry_formats_without_placeholders() {
         for opcode in 0_u8..=u8::MAX {
-            assert_complete_if_implemented(&[opcode, 0x34, 0x12, 0x00], OpcodePage::Main, opcode);
-            assert_complete_if_implemented(&[0xcb, opcode, 0x00, 0x00], OpcodePage::Cb, opcode);
-            assert_complete_if_implemented(&[0xed, opcode, 0x34, 0x12], OpcodePage::Ed, opcode);
+            assert_complete_if_implemented([opcode, 0x34, 0x12, 0x00], OpcodePage::Main, opcode);
+            assert_complete_if_implemented([0xcb, opcode, 0x00, 0x00], OpcodePage::Cb, opcode);
+            assert_complete_if_implemented([0xed, opcode, 0x34, 0x12], OpcodePage::Ed, opcode);
             assert_complete_if_implemented(
-                &[0xdd, opcode, 0x34, 0x12],
+                [0xdd, opcode, 0x34, 0x12],
                 OpcodePage::Index { iy: false },
                 opcode,
             );
             assert_complete_if_implemented(
-                &[0xfd, opcode, 0x34, 0x12],
+                [0xfd, opcode, 0x34, 0x12],
                 OpcodePage::Index { iy: true },
                 opcode,
             );
             assert_complete_if_implemented(
-                &[0xdd, 0xcb, 0x05, opcode],
+                [0xdd, 0xcb, 0x05, opcode],
                 OpcodePage::IndexCb { iy: false },
                 opcode,
             );
             assert_complete_if_implemented(
-                &[0xfd, 0xcb, 0x05, opcode],
+                [0xfd, 0xcb, 0x05, opcode],
                 OpcodePage::IndexCb { iy: true },
                 opcode,
             );
         }
     }
 
-    fn assert_complete_if_implemented(bytes: &[u8; 4], page: OpcodePage, opcode: u8) {
+    fn assert_complete_if_implemented(bytes: [u8; 4], page: OpcodePage, opcode: u8) {
         let descriptor = match page {
             OpcodePage::Main => Z180::<DisassemblyBus>::MAIN_OPCODES[usize::from(opcode)],
             OpcodePage::Cb => Z180::<DisassemblyBus>::CB_OPCODES[usize::from(opcode)],
@@ -330,7 +332,7 @@ mod tests {
         if descriptor.handler.is_none() {
             return;
         }
-        let decoded = disassemble_one(bytes, 0).expect("four bytes always provide one record");
+        let decoded = disassemble_one(&bytes, 0).expect("four bytes always provide one record");
         assert_eq!(decoded.len, descriptor.length, "{bytes:02X?}");
         assert!(
             !decoded.text.contains('{'),

@@ -1,3 +1,16 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "JavaScript numeric inputs are range-validated before conversion to fixed-width Z180 values"
+)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    clippy::ref_option,
+    reason = "wasm-bindgen exports owned ABI values and JavaScript-facing Result/getter semantics rather than a native Rust API"
+)]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

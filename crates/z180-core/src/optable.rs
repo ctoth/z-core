@@ -44,25 +44,9 @@ impl CycleCount {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
-)]
 pub(crate) const NMI_ACKNOWLEDGE_CYCLES: u8 = 11;
-#[allow(
-    dead_code,
-    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
-)]
 pub(crate) const INT0_MODE0_RST_CYCLES: u8 = 13;
-#[allow(
-    dead_code,
-    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
-)]
 pub(crate) const INT0_MODE1_ACKNOWLEDGE_CYCLES: u8 = 11;
-#[allow(
-    dead_code,
-    reason = "Phase 5 consumes the UM0050 interrupt-acknowledge timing constants"
-)]
 pub(crate) const VECTORED_ACKNOWLEDGE_CYCLES: u8 = 18;
 pub(crate) const HALT_IDLE_CYCLES: u8 = 3;
 pub(crate) const SECOND_OPCODE_TRAP_CYCLES: u8 = 17;
@@ -137,6 +121,10 @@ impl<B: HostBus> Opcode<B> {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive main-page opcode table is intentionally one auditable source of truth"
+)]
 const fn build_main_table<B: HostBus>() -> [Opcode<B>; 256] {
     let mut table = [Opcode::UNIMPLEMENTED; 256];
 
@@ -676,6 +664,10 @@ const fn build_cb_table<B: HostBus>() -> [Opcode<B>; 256] {
     table
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive index-page opcode table is intentionally one auditable source of truth"
+)]
 const fn build_index_table<B: HostBus, const IY: bool>() -> [Opcode<B>; 256] {
     let mut table = [Opcode::UNIMPLEMENTED; 256];
 
@@ -942,6 +934,11 @@ const fn ed_operands(opcode: u8) -> [OperandKind; 2] {
     }
 }
 
+#[allow(
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    reason = "separate ED opcode families preserve the UM0050 table grouping in the single instruction source of truth"
+)]
 const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
     let mut table = [Opcode::UNIMPLEMENTED; 256];
 

@@ -17,7 +17,7 @@ const FLAG_COMPARE_MASK: u8 = !0x28;
 
 #[derive(Debug, Args)]
 pub(crate) struct SstArgs {
-    /// Directory containing SingleStepTests v1 JSON files.
+    /// Directory containing `SingleStepTests` v1 JSON files.
     #[arg(long)]
     dir: PathBuf,
 
@@ -557,6 +557,10 @@ fn run_file(
     Ok(file_report)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the MMU corpus runner keeps programming, all sixteen probes, and final-state comparison in one auditable flow"
+)]
 fn run_mmu_file(file: String, cases: Vec<TestCase>, ignore_r: bool) -> Result<FileReport> {
     let mut file_report = FileReport {
         file,
@@ -758,6 +762,10 @@ fn load_state(cpu: &mut Z180<ScriptedBus>, state: &TestState) -> Result<()> {
     Ok(())
 }
 
+#[allow(
+    clippy::many_single_char_names,
+    reason = "the one-letter locals are the literal Z180 register names compared against the SST schema"
+)]
 fn compare(cpu: &Z180<ScriptedBus>, case: &TestCase, ignore_r: bool) -> Option<Failure> {
     let expected = &case.final_state;
     let flag_mask = case.flags_mask.unwrap_or(FLAG_COMPARE_MASK);

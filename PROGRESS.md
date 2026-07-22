@@ -3543,3 +3543,60 @@ P9.3 Node smoke: PASS
 All distinct G1..G9 commands are green, including the expected-failing
 negative controls. Exact duplicates were deliberately not rerun. P10.4 is
 complete.
+
+### P10.5 — final sweep and pedantic pass (2026-07-22)
+
+The tracked source sweep found no `TODO`, `FIXME`, or `dead_code` entries.
+The only repository match after cleanup is the instruction naming this sweep
+in `PLAN.md`; the two required untracked execution notes also describe the
+removed allowances.
+
+```text
+> rg -n --hidden -g '!.git/**' -g '!target/**' -g '!tests/sst/**' -g '!crates/z180-wasm/pkg/**' '(TODO|FIXME|dead_code)' .
+.\PLAN.md:939:5. Sweep for TODO/FIXME/dead code; clippy pedantic pass (fix or explicitly
+```
+
+Four stale `dead_code` allowances were removed from interrupt-acknowledge
+timing constants already consumed by the Phase 5 interrupt paths. Actionable
+pedantic findings were fixed directly. Explicit reasoned allowances remain
+only at these design boundaries:
+
+- fixed-width Z180 casts after masks or bounded iteration;
+- exhaustive single-source opcode tables and dispatchers;
+- independent hardware-state bits and the plan's owned constructor contract;
+- wasm-bindgen, PyO3, and Clap ABI/ownership conventions with validated input
+  ranges.
+
+No crate uses a blanket `allow(clippy::pedantic)`.
+
+```text
+> cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings
+    Checking z180-core v0.1.0 (C:\Users\Q\code\z-core\crates\z180-core)
+    Checking z180-cli v0.1.0 (C:\Users\Q\code\z-core\crates\z180-cli)
+    Checking z180-py v0.1.0 (C:\Users\Q\code\z-core\crates\z180-py)
+    Checking z180 v0.1.0 (C:\Users\Q\code\z-core\crates\z180-wasm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.71s
+```
+
+The local command pins the installed CPython 3.13.5 x86_64 interpreter through
+`PYO3_PYTHON` because the first Python on this machine's PATH is 32-bit.
+
+```text
+> cargo fmt --all -- --check
+```
+
+The formatting check completed successfully with no output.
+
+```text
+> cargo test --workspace
+z180-cli unit tests: 25 passed; 0 failed
+z180-cli dis integration: 1 passed; 0 failed
+z180-cli run integration: 1 passed; 0 failed
+z180-core: 89 passed; 0 failed
+z180-wasm: 0 passed; 0 failed
+z180-py: 0 passed; 0 failed
+Doc-tests z180_wasm: 0 passed; 0 failed
+Doc-tests z180_core: 0 passed; 0 failed
+```
+
+P10.5: PASS.

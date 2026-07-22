@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 #![no_std]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "Z180 registers, addresses, opcodes, and test indices intentionally narrow to fixed hardware widths after masking or bounded iteration"
+)]
 
 extern crate alloc;
 
@@ -183,6 +189,10 @@ impl core::fmt::Display for StateError {
 #[cfg(feature = "state")]
 impl core::error::Error for StateError {}
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "individual booleans model independent Z180 pins, latches, and enable bits"
+)]
 pub struct Z180<B: HostBus> {
     registers: Registers,
     memory: Memory,
@@ -249,6 +259,10 @@ pub struct Z180<B: HostBus> {
 
 #[cfg(feature = "state")]
 #[derive(serde::Deserialize, serde::Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the save-state schema mirrors the independent hardware bits in Z180 exactly"
+)]
 struct SavedState {
     registers: Registers,
     memory: Memory,
@@ -308,6 +322,16 @@ struct SavedState {
 }
 
 impl<B: HostBus> Z180<B> {
+    /// Constructs a machine with core-owned memory and the supplied host bus.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the physical address width, memory regions,
+    /// or external mapping configuration is invalid.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the public API deliberately transfers ownership of MachineConfig as specified by the architecture contract"
+    )]
     pub fn new(config: MachineConfig, bus: B) -> Result<Self, ConfigError> {
         let mut io_regs = [0; IO_REGISTER_COUNT];
         for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
@@ -455,6 +479,12 @@ impl<B: HostBus> Z180<B> {
         self.insn_trace_capture = None;
     }
 
+    /// Executes one instruction, interrupt acknowledge, or DMA service step.
+    #[allow(
+        clippy::missing_panics_doc,
+        clippy::too_many_lines,
+        reason = "the fetch loop keeps one auditable control path; all indexed hardware tables are bounded before guest-controlled access"
+    )]
     pub fn step(&mut self) -> u32 {
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
@@ -951,6 +981,11 @@ impl<B: HostBus> Z180<B> {
     }
 
     #[cfg(feature = "state")]
+    /// Replaces the current machine state from a versioned save-state payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateError`] when the version or serialized payload is invalid.
     pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
         let Some((&version, payload)) = data.split_first() else {
             return Err(StateError::MissingVersion);
@@ -1119,6 +1154,12 @@ impl<B: HostBus> Z180<B> {
         self.memory.poke(&mut self.bus, phys, value);
     }
 
+    /// Replaces a page-aligned physical range with a new region kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the range is unaligned or outside the
+    /// configured physical address space.
     pub fn remap(&mut self, base: u32, size: u32, kind: RegionKind) -> Result<(), ConfigError> {
         self.memory.remap(base, size, kind)
     }
@@ -1127,6 +1168,12 @@ impl<B: HostBus> Z180<B> {
         self.ext_mapper = mapper.map(ExtMapper::Function);
     }
 
+    /// Installs or clears the board-level external address mapping table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the table does not cover the complete
+    /// 20-bit Z180 physical address space.
     pub fn set_ext_map_table(&mut self, table: Option<Vec<u32>>) -> Result<(), ConfigError> {
         if let Some(table) = &table
             && table.len() != EXT_MAP_TABLE_LEN
@@ -1140,6 +1187,7 @@ impl<B: HostBus> Z180<B> {
         Ok(())
     }
 
+    #[must_use]
     pub fn ram_regions(&self) -> Vec<(u32, u32)> {
         self.memory.ram_regions()
     }
@@ -1152,6 +1200,7 @@ impl<B: HostBus> Z180<B> {
         self.memory.ram_region_mut(base)
     }
 
+    #[must_use]
     pub fn is_instruction_implemented(opcodes: &[u8]) -> bool {
         match opcodes {
             [opcode] => Self::MAIN_OPCODES[usize::from(*opcode)].handler.is_some(),
@@ -1275,7 +1324,7 @@ impl<B: HostBus> Z180<B> {
             | IrqSource::Asci0
             | IrqSource::Asci1 => {
                 let fixed_code = match source {
-                    IrqSource::Int1 => 0x00,
+                    IrqSource::Int1 | IrqSource::Nmi | IrqSource::Int0 => 0x00,
                     IrqSource::Int2 => 0x02,
                     IrqSource::Prt0 => 0x04,
                     IrqSource::Prt1 => 0x06,
@@ -1284,7 +1333,6 @@ impl<B: HostBus> Z180<B> {
                     IrqSource::Csio => 0x0c,
                     IrqSource::Asci0 => 0x0e,
                     IrqSource::Asci1 => 0x10,
-                    IrqSource::Nmi | IrqSource::Int0 => 0,
                 };
                 let [i, _] = self.registers.get(Reg::IR).to_be_bytes();
                 let vector_low = (self.io_regs[IL] & 0xe0) | fixed_code;
@@ -1529,6 +1577,10 @@ impl<B: HostBus> Z180<B> {
         }
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "all opcode handlers share the table's method-pointer signature, including NOP"
+    )]
     pub(crate) fn execute_nop(&mut self, _opcode: u8) {}
 
     pub(crate) fn execute_halt(&mut self, _opcode: u8) {
@@ -1589,7 +1641,7 @@ impl<B: HostBus> Z180<B> {
         let value = self.read_reg8(code);
         let result = value.wrapping_sub(1);
         let mut flags = Self::sign_zero_xy(result) | (self.flags() & FLAG_C) | FLAG_N;
-        if value & 0x0f == 0 {
+        if value.trailing_zeros() >= 4 {
             flags |= FLAG_H;
         }
         if value == 0x80 {
@@ -1681,6 +1733,10 @@ impl<B: HostBus> Z180<B> {
         self.write_reg8(code, value | mask);
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the indexed-page dispatcher stays aligned with the single auditable opcode table"
+    )]
     pub(crate) fn execute_index<const IY: bool>(&mut self, opcode: u8) {
         let index_reg = if IY { Reg::IY } else { Reg::IX };
 
@@ -1749,7 +1805,7 @@ impl<B: HostBus> Z180<B> {
                     }
                 } else {
                     flags |= FLAG_N;
-                    if value & 0x0f == 0 {
+                    if value.trailing_zeros() >= 4 {
                         flags |= FLAG_H;
                     }
                     if value == 0x80 {
@@ -1865,6 +1921,10 @@ impl<B: HostBus> Z180<B> {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the ED-page dispatcher stays aligned with the single auditable opcode table"
+    )]
     pub(crate) fn execute_ed(&mut self, opcode: u8) {
         match opcode {
             0x00 | 0x08 | 0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38 => {
@@ -2135,7 +2195,7 @@ impl<B: HostBus> Z180<B> {
                     let parity_input = if flags & FLAG_C != 0 {
                         flags &= !FLAG_H;
                         if flags & FLAG_N != 0 {
-                            if next_b & 0x0f == 0 {
+                            if next_b.trailing_zeros() >= 4 {
                                 flags |= FLAG_H;
                             }
                             next_b.wrapping_sub(1) & 0x07
@@ -2517,7 +2577,7 @@ impl<B: HostBus> Z180<B> {
         let spec = IO_REG_SPECS[index];
         let value = self.io_reg_peek(index as u8);
         match spec.read_effect {
-            ReadEffect::AsciCntlb => value,
+            ReadEffect::AsciCntlb | ReadEffect::None => value,
             ReadEffect::AsciStat => {
                 if index == STAT0 {
                     self.asci_dcd_irq_pending = false;
@@ -2543,7 +2603,6 @@ impl<B: HostBus> Z180<B> {
                 self.update_csio_interrupt_request();
                 value
             }
-            ReadEffect::None => value,
             ReadEffect::Tcr => {
                 self.prt_clear_armed = (value >> 6) & 0x03;
                 value
@@ -2735,8 +2794,8 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn asci_frame_cycles(&self, channel: usize) -> Option<u64> {
-        let cntla = self.io_regs[CNTLA0 + channel];
-        let cntlb = self.io_regs[CNTLB0 + channel];
+        let asci_control_a = self.io_regs[CNTLA0 + channel];
+        let asci_control_b = self.io_regs[CNTLB0 + channel];
         let asext = if self.variant == Variant::Z8S180 {
             self.io_regs[0x12 + channel]
         } else {
@@ -2744,7 +2803,7 @@ impl<B: HostBus> Z180<B> {
         };
         let clock_mode = if asext & 0x10 != 0 {
             1_u64
-        } else if cntlb & 0x08 == 0 {
+        } else if asci_control_b & 0x08 == 0 {
             16
         } else {
             64
@@ -2759,17 +2818,21 @@ impl<B: HostBus> Z180<B> {
                 u64::from(u16::from_le_bytes([self.io_regs[low], self.io_regs[high]]));
             2 * (time_constant + 2) * clock_mode
         } else {
-            let divisor = cntlb & 0x07;
+            let divisor = asci_control_b & 0x07;
             if divisor == 0x07 {
                 return None;
             }
-            let prescale = if cntlb & 0x20 == 0 { 10_u64 } else { 30 };
+            let prescale = if asci_control_b & 0x20 == 0 {
+                10_u64
+            } else {
+                30
+            };
             prescale * (1_u64 << divisor) * clock_mode
         };
 
-        let data_bits = if cntla & 0x04 != 0 { 8_u64 } else { 7 };
-        let parity_or_mp = u64::from(cntla & 0x02 != 0 || cntlb & 0x40 != 0);
-        let stop_bits = if cntla & 0x01 != 0 { 2_u64 } else { 1 };
+        let data_bits = if asci_control_a & 0x04 != 0 { 8_u64 } else { 7 };
+        let parity_or_mp = u64::from(asci_control_a & 0x02 != 0 || asci_control_b & 0x40 != 0);
+        let stop_bits = if asci_control_a & 0x01 != 0 { 2_u64 } else { 1 };
         Some((1 + data_bits + parity_or_mp + stop_bits) * bit_cycles)
     }
 
@@ -3123,7 +3186,10 @@ impl<B: HostBus> Z180<B> {
                 source.wrapping_add(1) & 0x000f_ffff,
                 source & 0xffff == 0xffff,
             ),
-            1 => (source.wrapping_sub(1) & 0x000f_ffff, source & 0xffff == 0),
+            1 => (
+                source.wrapping_sub(1) & 0x000f_ffff,
+                source.trailing_zeros() >= 16,
+            ),
             _ => (source, false),
         };
         let (next_destination, destination_crossed) = match destination_mode {
@@ -3133,7 +3199,7 @@ impl<B: HostBus> Z180<B> {
             ),
             1 => (
                 destination.wrapping_sub(1) & 0x000f_ffff,
-                destination & 0xffff == 0,
+                destination.trailing_zeros() >= 16,
             ),
             _ => (destination, false),
         };
@@ -3179,7 +3245,7 @@ impl<B: HostBus> Z180<B> {
         let io_waits = u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1);
         let decrements = mode & 0x01 != 0;
         let crossed = if decrements {
-            memory & 0xffff == 0
+            memory.trailing_zeros() >= 16
         } else {
             memory & 0xffff == 0xffff
         };
@@ -3369,9 +3435,9 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingBus {
-        io_read_value: u8,
-        io_reads: Vec<u16>,
-        io_writes: Vec<(u16, u8)>,
+        read_value: u8,
+        reads: Vec<u16>,
+        writes: Vec<(u16, u8)>,
     }
 
     impl HostBus for RecordingBus {
@@ -3382,12 +3448,12 @@ mod tests {
         fn mem_write(&mut self, _phys: u32, _value: u8) {}
 
         fn io_read(&mut self, port: u16) -> u8 {
-            self.io_reads.push(port);
-            self.io_read_value
+            self.reads.push(port);
+            self.read_value
         }
 
         fn io_write(&mut self, port: u16, value: u8) {
-            self.io_writes.push((port, value));
+            self.writes.push((port, value));
         }
     }
 
@@ -3856,16 +3922,16 @@ mod tests {
         cpu.set_dreq(0, true);
 
         assert_eq!(cpu.step(), 10, "6 + one I/O wait + 3-cycle NOP");
-        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x41)]);
+        assert_eq!(cpu.bus.writes, vec![(0x1234, 0x41)]);
         assert_eq!(cpu.io_reg_peek(BCR0L as u8), 0x01);
         assert_eq!(cpu.step(), 3, "held edge-sense DREQ does not retrigger");
-        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x41)]);
+        assert_eq!(cpu.bus.writes, vec![(0x1234, 0x41)]);
         cpu.set_dreq(0, false);
         cpu.set_dreq(0, true);
         assert_eq!(cpu.step(), 10);
-        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x41), (0x1234, 0x42)]);
+        assert_eq!(cpu.bus.writes, vec![(0x1234, 0x41), (0x1234, 0x42)]);
 
-        cpu.bus.io_read_value = 0x5a;
+        cpu.bus.read_value = 0x5a;
         cpu.write_internal_io(SAR0L, 0x78);
         cpu.write_internal_io(SAR0H, 0x56);
         cpu.write_internal_io(DAR0L, 0x00);
@@ -3876,7 +3942,7 @@ mod tests {
         cpu.set_dreq(0, false);
         cpu.set_dreq(0, true);
         assert_eq!(cpu.step(), 10);
-        assert_eq!(cpu.bus.io_reads, vec![0x5678]);
+        assert_eq!(cpu.bus.reads, vec![0x5678]);
         assert_eq!(cpu.mem_peek(0x0500), 0x5a);
     }
 
@@ -3895,11 +3961,11 @@ mod tests {
         cpu.set_dreq(1, true);
 
         assert_eq!(cpu.step(), 19, "2 * (6 + 2 I/O waits) + 3-cycle NOP");
-        assert_eq!(cpu.bus.io_writes, vec![(0x1234, 0x71), (0x1234, 0x72)]);
+        assert_eq!(cpu.bus.writes, vec![(0x1234, 0x71), (0x1234, 0x72)]);
         assert_eq!(cpu.io_reg_peek(MAR1L as u8), 0x02);
         assert_eq!(cpu.io_reg_peek(BCR1L as u8), 0x00);
 
-        cpu.bus.io_read_value = 0xa5;
+        cpu.bus.read_value = 0xa5;
         cpu.write_internal_io(MAR1L, 0x01);
         cpu.write_internal_io(MAR1H, 0x04);
         cpu.write_internal_io(IAR1L, 0x78);
@@ -3909,7 +3975,7 @@ mod tests {
         cpu.write_internal_io(DSTAT, 0x90);
 
         assert_eq!(cpu.step(), 19, "2 * (6 + 2 I/O waits) + 3-cycle NOP");
-        assert_eq!(cpu.bus.io_reads, vec![0x5678, 0x5678]);
+        assert_eq!(cpu.bus.reads, vec![0x5678, 0x5678]);
         assert_eq!(cpu.mem_peek(0x0401), 0xa5);
         assert_eq!(cpu.mem_peek(0x0400), 0xa5);
         assert_eq!(cpu.io_reg_peek(MAR1L as u8), 0xff);
@@ -3938,10 +4004,10 @@ mod tests {
         cpu.set_dreq(1, true);
 
         assert_eq!(cpu.step(), 10);
-        assert_eq!(cpu.bus.io_writes, vec![(0x1111, 0xa0)]);
+        assert_eq!(cpu.bus.writes, vec![(0x1111, 0xa0)]);
         assert_eq!(cpu.io_reg_peek(DSTAT as u8) & 0xc0, 0x80);
         assert_eq!(cpu.step(), 10);
-        assert_eq!(cpu.bus.io_writes, vec![(0x1111, 0xa0), (0x2222, 0xb1)]);
+        assert_eq!(cpu.bus.writes, vec![(0x1111, 0xa0), (0x2222, 0xb1)]);
         assert_eq!(cpu.io_reg_peek(DSTAT as u8) & 0xc0, 0x00);
     }
 
@@ -4068,12 +4134,7 @@ mod tests {
         std::println!(
             "DIVERGE cycle={divergent_cycle} pc={divergent_pc:04X} af={divergent_af:04X}"
         );
-        std::println!(
-            "LOAD cycle={} pc={:04X} af={:04X}",
-            loaded_cycle,
-            loaded_pc,
-            loaded_af
-        );
+        std::println!("LOAD cycle={loaded_cycle} pc={loaded_pc:04X} af={loaded_af:04X}");
         std::println!(
             "UNINTERRUPTED cycle={} pc={:04X} af={:04X}",
             uninterrupted.cycle_count(),
@@ -4402,7 +4463,7 @@ mod tests {
     fn event_io_trace_records_cpu_dma_and_internal_duplicate_accesses_once() {
         let mut cpu = recording_machine(Variant::Z80180);
         cpu.instruction_pc = 0x1234;
-        cpu.bus.io_read_value = 0x5a;
+        cpu.bus.read_value = 0x5a;
         cpu.set_io_trace(true);
 
         assert_eq!(cpu.read_io(0x0040), 0x5a);
@@ -4446,7 +4507,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(cpu.bus.io_reads, vec![0x0040, CNTLA0 as u16, 0x0042]);
+        assert_eq!(cpu.bus.reads, vec![0x0040, CNTLA0 as u16, 0x0042]);
 
         cpu.set_io_trace(false);
         let _ = cpu.read_io(0x0044);
@@ -5280,7 +5341,7 @@ mod tests {
         cpu.set_reg(Reg::BC, 0x4000);
         cpu.step();
         assert_eq!(cpu.io_reg_peek(ICR as u8), 0x40);
-        assert_eq!(cpu.bus.io_writes, vec![(0x003f, 0x40)]);
+        assert_eq!(cpu.bus.writes, vec![(0x003f, 0x40)]);
 
         cpu.mem_poke(3, 0xed);
         cpu.mem_poke(4, 0x01);
@@ -5288,7 +5349,7 @@ mod tests {
         cpu.set_reg(Reg::BC, 0x5a00);
         cpu.step();
         assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0x5a);
-        assert_eq!(cpu.bus.io_writes[1], (0x0072, 0x5a));
+        assert_eq!(cpu.bus.writes[1], (0x0072, 0x5a));
 
         cpu.mem_poke(6, 0xed);
         cpu.mem_poke(7, 0x01);
@@ -5296,7 +5357,7 @@ mod tests {
         cpu.set_reg(Reg::BC, 0xa500);
         cpu.step();
         assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0x5a, "old window is external");
-        assert_eq!(cpu.bus.io_writes[2], (0x0032, 0xa5));
+        assert_eq!(cpu.bus.writes[2], (0x0032, 0xa5));
 
         cpu.mem_poke(9, 0xed);
         cpu.mem_poke(10, 0x41);
@@ -5307,7 +5368,7 @@ mod tests {
             0x5a,
             "nonzero high byte is external"
         );
-        assert_eq!(cpu.bus.io_writes[3], (0xa572, 0xa5));
+        assert_eq!(cpu.bus.writes[3], (0xa572, 0xa5));
     }
 
     #[test]
@@ -5340,7 +5401,7 @@ mod tests {
         assert_ne!(cpu.step(), 0);
         assert_eq!(cpu.io_reg_peek(DCNTL as u8), 0xa5);
         assert_eq!(
-            cpu.bus.io_writes,
+            cpu.bus.writes,
             vec![
                 (0x003f, 0x40),
                 (0x007f, 0x00),
@@ -5353,17 +5414,17 @@ mod tests {
     #[test]
     fn ioregs_in0_tstio_and_otim_use_internal_data_and_duplicate_the_bus() {
         let mut input = recording_machine(Variant::Z80180);
-        input.bus.io_read_value = 0x55;
+        input.bus.read_value = 0x55;
         input.io_regs[DCNTL] = 0xa5;
         input.mem_poke(0, 0xed);
         input.mem_poke(1, 0x00);
         input.mem_poke(2, 0x32);
         input.step();
         assert_eq!(input.reg(Reg::BC).to_be_bytes()[0], 0xa5);
-        assert_eq!(input.bus.io_reads, vec![0x0032]);
+        assert_eq!(input.bus.reads, vec![0x0032]);
 
         let mut tstio = recording_machine(Variant::Z80180);
-        tstio.bus.io_read_value = 0xff;
+        tstio.bus.read_value = 0xff;
         tstio.io_regs[DCNTL] = 0x81;
         tstio.mem_poke(0, 0xed);
         tstio.mem_poke(1, 0x74);
@@ -5374,7 +5435,7 @@ mod tests {
             tstio.reg(Reg::AF).to_be_bytes()[1] & (FLAG_S | FLAG_Z),
             FLAG_S
         );
-        assert_eq!(tstio.bus.io_reads, vec![0x0032]);
+        assert_eq!(tstio.bus.reads, vec![0x0032]);
 
         let mut otim = recording_machine(Variant::Z80180);
         otim.mem_poke(0, 0xed);
@@ -5384,7 +5445,7 @@ mod tests {
         otim.set_reg(Reg::HL, 0x2000);
         assert_eq!(otim.step(), 23, "internal OTIM has no external-I/O waits");
         assert_eq!(otim.io_reg_peek(DCNTL as u8), 0x60);
-        assert_eq!(otim.bus.io_writes, vec![(0x0032, 0x60)]);
+        assert_eq!(otim.bus.writes, vec![(0x0032, 0x60)]);
     }
 
     #[test]
@@ -6122,37 +6183,37 @@ mod tests {
 
     #[test]
     fn reti_preserves_iffs_while_retn_restores_iff1() {
-        let mut reti = machine();
-        reti.mem_poke(0, 0xed);
-        reti.mem_poke(1, 0x4d);
-        reti.mem_poke(0x2000, 0x34);
-        reti.mem_poke(0x2001, 0x12);
-        reti.set_reg(Reg::SP, 0x2000);
-        reti.set_iff1(false);
-        reti.set_iff2(true);
+        let mut interrupt_return = machine();
+        interrupt_return.mem_poke(0, 0xed);
+        interrupt_return.mem_poke(1, 0x4d);
+        interrupt_return.mem_poke(0x2000, 0x34);
+        interrupt_return.mem_poke(0x2001, 0x12);
+        interrupt_return.set_reg(Reg::SP, 0x2000);
+        interrupt_return.set_iff1(false);
+        interrupt_return.set_iff2(true);
 
-        assert_eq!(reti.step(), 34);
+        assert_eq!(interrupt_return.step(), 34);
 
-        assert_eq!(reti.reg(Reg::PC), 0x1234);
-        assert_eq!(reti.reg(Reg::SP), 0x2002);
-        assert!(!reti.iff1());
-        assert!(reti.iff2());
+        assert_eq!(interrupt_return.reg(Reg::PC), 0x1234);
+        assert_eq!(interrupt_return.reg(Reg::SP), 0x2002);
+        assert!(!interrupt_return.iff1());
+        assert!(interrupt_return.iff2());
 
-        let mut retn = machine();
-        retn.mem_poke(0, 0xed);
-        retn.mem_poke(1, 0x45);
-        retn.mem_poke(0x2000, 0x78);
-        retn.mem_poke(0x2001, 0x56);
-        retn.set_reg(Reg::SP, 0x2000);
-        retn.set_iff1(false);
-        retn.set_iff2(true);
+        let mut nmi_return = machine();
+        nmi_return.mem_poke(0, 0xed);
+        nmi_return.mem_poke(1, 0x45);
+        nmi_return.mem_poke(0x2000, 0x78);
+        nmi_return.mem_poke(0x2001, 0x56);
+        nmi_return.set_reg(Reg::SP, 0x2000);
+        nmi_return.set_iff1(false);
+        nmi_return.set_iff2(true);
 
-        assert_eq!(retn.step(), 24);
+        assert_eq!(nmi_return.step(), 24);
 
-        assert_eq!(retn.reg(Reg::PC), 0x5678);
-        assert_eq!(retn.reg(Reg::SP), 0x2002);
-        assert!(retn.iff1());
-        assert!(retn.iff2());
+        assert_eq!(nmi_return.reg(Reg::PC), 0x5678);
+        assert_eq!(nmi_return.reg(Reg::SP), 0x2002);
+        assert!(nmi_return.iff1());
+        assert!(nmi_return.iff2());
 
         let config = MachineConfig {
             variant: Variant::Z8S180,
@@ -6213,6 +6274,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one numbered test preserves the complete hand-computed timing checklist from the plan"
+    )]
     fn timing_spot_checks_hand_computed_program_totals() {
         let mut checked = 0_u8;
 

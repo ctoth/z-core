@@ -238,29 +238,29 @@ impl Memory {
     }
 
     fn reclaim_unreferenced_stores(&mut self) {
-        let mut live_ram = vec![false; self.ram_stores.len()];
-        let mut live_rom = vec![false; self.rom_stores.len()];
+        let mut ram_marks = vec![false; self.ram_stores.len()];
+        let mut rom_usage = vec![false; self.rom_stores.len()];
         for page in &self.pages {
             match *page {
                 Page::Ram { store, .. } => {
-                    if let Some(live) = live_ram.get_mut(store) {
+                    if let Some(live) = ram_marks.get_mut(store) {
                         *live = true;
                     }
                 }
                 Page::Rom { store, .. } => {
-                    if let Some(live) = live_rom.get_mut(store) {
+                    if let Some(live) = rom_usage.get_mut(store) {
                         *live = true;
                     }
                 }
                 Page::External | Page::Unmapped => {}
             }
         }
-        for (store, live) in self.ram_stores.iter_mut().zip(live_ram) {
+        for (store, live) in self.ram_stores.iter_mut().zip(ram_marks) {
             if !live {
                 *store = None;
             }
         }
-        for (store, live) in self.rom_stores.iter_mut().zip(live_rom) {
+        for (store, live) in self.rom_stores.iter_mut().zip(rom_usage) {
             if !live {
                 *store = None;
             }

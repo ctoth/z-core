@@ -1,4 +1,13 @@
 #![allow(clippy::upper_case_acronyms)]
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::needless_pass_by_value,
+    clippy::ref_option,
+    clippy::unused_self,
+    reason = "PyO3 requires owned Python ABI values and raw-buffer callbacks; lengths are validated before fixed-width conversion"
+)]
 
 use std::ffi::{CString, c_int, c_void};
 use std::ptr;

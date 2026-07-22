@@ -1,3 +1,12 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "CLI file offsets and generated guest values are bounded before narrowing to Z180 address widths"
+)]
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Clap transfers ownership of parsed command arguments to the selected command runner"
+)]
+
 mod dis;
 mod run;
 mod sst;
@@ -20,9 +29,9 @@ enum Command {
     Dis(dis::DisArgs),
     /// Run a bare ROM using a TOML machine configuration.
     Run(run::RunArgs),
-    /// Run SingleStepTests JSON conformance cases.
+    /// Run `SingleStepTests` JSON conformance cases.
     Sst(sst::SstArgs),
-    /// Run a CP/M ZEX instruction exerciser image.
+    /// Run a `CP/M` `ZEX` instruction exerciser image.
     Zex(zex::ZexArgs),
 }
 
