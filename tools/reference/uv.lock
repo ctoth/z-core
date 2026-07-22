@@ -100,16 +100,28 @@ wheels = [
 ]
 
 [[package]]
+name = "z180"
+version = "0.1.0"
+source = { directory = "../../crates/z180-py" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8,<10" }]
+
+[[package]]
 name = "z180-reference"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "hypothesis" },
     { name = "pytest" },
+    { name = "z180" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "hypothesis", specifier = ">=6.136,<7" },
     { name = "pytest", specifier = ">=8.4,<9" },
+    { name = "z180", directory = "../../crates/z180-py" },
 ]

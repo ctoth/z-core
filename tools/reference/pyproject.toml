@@ -6,7 +6,11 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "hypothesis>=6.136,<7",
     "pytest>=8.4,<9",
+    "z180",
 ]
+
+[tool.uv.sources]
+z180 = { path = "../../crates/z180-py" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]

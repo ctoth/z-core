@@ -18,6 +18,10 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           submodules: true
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.1.0
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - name: Check formatting
@@ -30,3 +34,5 @@ jobs:
         run: cargo test --workspace
       - name: Run state feature tests
         run: cargo test -p z180-core --features state
+      - name: Run reference differential gate
+        run: uv run --project tools/reference pytest tools/reference/test_differential.py -q --hypothesis-profile=gate

@@ -2815,7 +2815,50 @@ does not initialize AF, that is an initial-state difference, not an
 instruction divergence. No incumbent source was read, no adjudication claim
 was made, and the non-qualifying diagnostic harness was discarded.
 
-P8.5 is complete pending its record commit, push, and CI. P8.6 is next after
+P8.5 landed as `9840ef7`. CI run `29880167837` passed on Ubuntu in 1m14s
+and Windows in 2m16s.
+
+### P8.6 — Hypothesis reference differential fuzzer
+
+`tools/reference/test_differential.py` implements the three mandatory
+two-way properties against the independent UM0050 model:
+
+- Property A executes every generated Z180-added instruction form from an
+  arbitrary generated state and compares final CPU/Z180 state, the exact
+  memory touches, and ordered I/O events. F is masked by the case's verified
+  `flags_mask`.
+- Property B executes 1..32 generated reference-modeled instructions in a 4K
+  arena, excluding SLP and non-terminal repeat forms, and compares state,
+  memory touches, and I/O after every instruction. Undefined flag bits are
+  synchronized from the machine after each masked comparison so they cannot
+  become false mismatches in a later flag-preserving instruction.
+- Property C compares generated second-byte undefined-opcode TRAP state and
+  touched memory, then randomizes CBR/BBR/CBAR and checks both the native MMU
+  translation API and actual logical reads across all 16 pages against the
+  independent closed-form formula.
+
+The optional incumbent leg is absent for the exact P8.5 reason recorded
+above. `tools/reference/.hypothesis/` is the checked-in database location.
+The `gate` profile runs 2,000 examples per property and the `nightly` profile
+runs 50,000. CI installs Python 3.13 and uv and executes the gate on both
+Ubuntu and Windows, reusing any checked-in database entries.
+
+The final full reference-project gate is green:
+
+```text
+> uv run --project tools/reference pytest tools/reference -q \
+    --hypothesis-profile=gate
+......                                                                   [100%]
+6 passed in 54.67s
+```
+
+All three differential properties therefore passed 2,000 examples with zero
+surviving semantic counterexamples. Pinned regressions: none. The failures
+seen while constructing the harness occurred before or outside semantic
+comparison and were corrected without changing the emulator or independent
+reference transition model.
+
+P8.6 is complete pending this record's commit, push, and CI. G8 is next after
 that landing completes.
 
 ## Phase 9 — WASM and TypeScript

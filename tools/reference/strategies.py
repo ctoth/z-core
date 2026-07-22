@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from hypothesis import strategies as st
 
 from spec import (
     INSTRUCTIONS,
     UNDEFINED_SECOND_OPCODES,
     Instruction,
+    instruction_transition,
     mmu_translate,
     normalized_ram,
     reset_z180_state,
@@ -107,6 +110,71 @@ any_instruction_input = instruction_encodings.flatmap(
 
 
 @st.composite
+def sequence_inputs(draw: st.DrawFn) -> dict:
+    """Generate up to 32 sequentially valid reference-modeled instructions."""
+
+    initial = draw(cpu_states())
+    initial["pc"] = 0x1000
+    initial["ram"] = []
+    state = deepcopy(initial)
+    memory: dict[int, int] = {}
+    steps = []
+    count = draw(st.integers(min_value=1, max_value=32))
+
+    for _ in range(count):
+        hl = (state["h"] << 8) | state["l"]
+        candidates = [
+            instruction
+            for instruction in INSTRUCTIONS
+            if instruction.operation != "slp"
+            and (not instruction.repeat or state["b"] == 1)
+            and (
+                instruction.operation not in {"tstio", "otim"}
+                or state["c"] >= 0x40
+            )
+            and (
+                instruction.operation not in {"tst_hl", "otim"}
+                or not 0x1000 <= hl < 0x2000
+            )
+        ]
+        instruction = draw(st.sampled_from(candidates))
+        pc = state["pc"]
+        updates: dict[int, int] = {}
+        for offset, byte in enumerate(instruction.opcode):
+            updates[pc + offset] = byte
+
+        port_value = None
+        if instruction.operation in {"in0", "out0"}:
+            updates[pc + 2] = draw(external_port_addresses)
+        elif instruction.operation in {"tst_imm", "tstio"}:
+            updates[pc + 2] = draw(memory_values)
+
+        if instruction.operation in {"in0", "tstio"}:
+            port_value = draw(memory_values)
+
+        if instruction.operation in {"tst_hl", "otim"}:
+            updates[hl] = draw(memory_values)
+
+        memory.update(updates)
+        state["ram"] = normalized_ram(memory)
+        final, _ports = instruction_transition(
+            state,
+            instruction,
+            port_value=port_value,
+        )
+        steps.append(
+            {
+                "instruction": instruction,
+                "memory_updates": normalized_ram(updates),
+                "port_value": port_value,
+            }
+        )
+        state = final
+
+    return {"initial": initial, "steps": steps}
+
+
+@st.composite
 def trap_inputs(draw: st.DrawFn, opcode: tuple[int, int]) -> dict:
     """Generate representative second-opcode undefined-fetch states."""
 
@@ -119,6 +187,9 @@ def trap_inputs(draw: st.DrawFn, opcode: tuple[int, int]) -> dict:
     }
     state["ram"] = normalized_ram(memory)
     return {"initial": state, "opcode": opcode}
+
+
+any_trap_input = st.sampled_from(UNDEFINED_SECOND_OPCODES).flatmap(trap_inputs)
 
 
 @st.composite
