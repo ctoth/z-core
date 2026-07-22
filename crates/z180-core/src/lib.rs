@@ -565,9 +565,9 @@ impl<B: HostBus> Z180<B> {
                     .get(index)
                     .wrapping_add(i16::from(displacement) as u16);
                 let _ = self.read_logical(address);
-                self.take_trap([first_opcode, 0xcb, opcode], 3, pc.wrapping_add(4), true, 3);
+                self.take_trap([first_opcode, 0xcb, opcode], 3, pc.wrapping_add(2), true, 3);
             } else if matches!(first_opcode, 0xcb | 0xdd | 0xed | 0xfd) {
-                self.take_trap([first_opcode, opcode, 0], 2, pc.wrapping_add(2), false, 2);
+                self.take_trap([first_opcode, opcode, 0], 2, pc.wrapping_add(1), false, 2);
             } else {
                 self.take_trap([first_opcode, 0, 0], 1, pc.wrapping_add(1), false, 1);
             }
@@ -5570,7 +5570,7 @@ mod tests {
             assert_eq!(cpu.instruction_pc(), 0x1234, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::PC), 0, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{opcodes:02x?}");
-            assert_eq!(cpu.mem_peek(0x7ffe), 0x36, "{opcodes:02x?}");
+            assert_eq!(cpu.mem_peek(0x7ffe), 0x35, "{opcodes:02x?}");
             assert_eq!(cpu.mem_peek(0x7fff), 0x12, "{opcodes:02x?}");
             assert_eq!(cpu.reg(Reg::IR), 0x5680, "{opcodes:02x?}");
             assert_eq!(cpu.itc(), 0x81, "{opcodes:02x?}");
@@ -5609,7 +5609,7 @@ mod tests {
             assert_eq!(cpu.instruction_pc(), 0x1234, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::PC), 0, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "{prefix:02x}");
-            assert_eq!(cpu.mem_peek(0x7ffe), 0x38, "{prefix:02x}");
+            assert_eq!(cpu.mem_peek(0x7ffe), 0x36, "{prefix:02x}");
             assert_eq!(cpu.mem_peek(0x7fff), 0x12, "{prefix:02x}");
             assert_eq!(cpu.reg(Reg::IR), 0x5601, "{prefix:02x}");
             assert_eq!(cpu.itc(), 0xc1, "{prefix:02x}");

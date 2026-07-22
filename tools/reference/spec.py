@@ -136,6 +136,17 @@ UNDEFINED_SECOND_OPCODES = (
     (0xFD, 0x24),
 )
 
+# Table 48 only substitutes IX/IY for the documented Table 49 (HL) cells.
+# Register-result DDCB/FDCB forms are undefined third-opcode fetches, for
+# which UFO is one. One representative from each indexed page is sufficient
+# to exercise the distinct stack/R/ITC transition.
+UNDEFINED_THIRD_OPCODES = (
+    (0xDD, 0xCB, 0x40),
+    (0xFD, 0xCB, 0x40),
+)
+
+UNDEFINED_TRAP_OPCODES = (*UNDEFINED_SECOND_OPCODES, *UNDEFINED_THIRD_OPCODES)
+
 
 def reset_z180_state() -> dict[str, int | bool]:
     """Return the verified reset defaults represented in Appendix C."""
@@ -296,20 +307,24 @@ def instruction_transition(
 
 
 def trap_transition(initial: State) -> State:
-    """Apply the UM0050 second-opcode undefined-fetch TRAP transition."""
+    """Apply the UM0050 undefined-fetch TRAP transition."""
 
     final = deepcopy(initial)
-    stacked_pc = (initial["pc"] + 2) & 0xFFFF
+    pc = initial["pc"]
+    memory = ram_dict(initial)
+    third_opcode = memory[pc] in {0xDD, 0xFD} and memory[(pc + 1) & 0xFFFF] == 0xCB
+    stacked_pc = (pc + (2 if third_opcode else 1)) & 0xFFFF
     sp_minus_one = (initial["sp"] - 1) & 0xFFFF
     sp_minus_two = (initial["sp"] - 2) & 0xFFFF
-    memory = ram_dict(initial)
     memory[sp_minus_one] = stacked_pc >> 8
     memory[sp_minus_two] = stacked_pc & 0xFF
     final["ram"] = normalized_ram(memory)
     final["sp"] = sp_minus_two
     final["pc"] = 0
-    final["r"] = _increment_r(initial["r"])
+    final["r"] = _increment_r(initial["r"], 3 if third_opcode else 2)
     final["z180"]["itc"] = (initial["z180"]["itc"] | ITC_TRAP) & ~ITC_UFO
+    if third_opcode:
+        final["z180"]["itc"] |= ITC_UFO
     return final
 
 

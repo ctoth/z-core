@@ -14,7 +14,7 @@ from hypothesis.strategies import SearchStrategy
 from spec import (
     DEFINED_FLAGS_MASK,
     INSTRUCTIONS,
-    UNDEFINED_SECOND_OPCODES,
+    UNDEFINED_TRAP_OPCODES,
     instruction_transition,
     trap_transition,
 )
@@ -141,8 +141,8 @@ def _instruction_cases(instruction, seed_value: int) -> list[dict[str, Any]]:
 
 def _trap_cases(seed_value: int) -> list[dict[str, Any]]:
     cases = []
-    minimum, remainder = divmod(TRAP_CASES, len(UNDEFINED_SECOND_OPCODES))
-    for opcode_index, opcode in enumerate(UNDEFINED_SECOND_OPCODES):
+    minimum, remainder = divmod(TRAP_CASES, len(UNDEFINED_TRAP_OPCODES))
+    for opcode_index, opcode in enumerate(UNDEFINED_TRAP_OPCODES):
         subgroup_count = minimum + (1 if opcode_index < remainder else 0)
         subgroup_seed = seed_value + opcode_index
         generated = collect_examples(
@@ -155,7 +155,7 @@ def _trap_cases(seed_value: int) -> list[dict[str, Any]]:
             case = _common_case(
                 "trap",
                 subgroup_seed,
-                f"TRAP {opcode[0]:02X}{opcode[1]:02X} {index:04X}",
+                f"TRAP {''.join(f'{byte:02X}' for byte in opcode)} {index:04X}",
             )
             case.update(
                 {
@@ -352,8 +352,13 @@ def validate_corpus(root: Path) -> None:
                 )
                 memory = {address: value for address, value in case["initial"]["ram"]}
                 pc = case["initial"]["pc"]
-                opcode = (memory[pc], memory[(pc + 1) & 0xFFFF])
-                _require(opcode in UNDEFINED_SECOND_OPCODES, f"{location} is not a verified TRAP")
+                prefix = (memory[pc], memory[(pc + 1) & 0xFFFF])
+                opcode = (
+                    (*prefix, memory[(pc + 3) & 0xFFFF])
+                    if prefix in {(0xDD, 0xCB), (0xFD, 0xCB)}
+                    else prefix
+                )
+                _require(opcode in UNDEFINED_TRAP_OPCODES, f"{location} is not a verified TRAP")
                 trap_opcodes.add(opcode)
             else:
                 _require(
@@ -363,7 +368,7 @@ def validate_corpus(root: Path) -> None:
                 _validate_mmu_probes(case, location)
         _require(len(names) == len(set(names)), f"{filename} has duplicate case names")
     _require(
-        trap_opcodes == set(UNDEFINED_SECOND_OPCODES),
+        trap_opcodes == set(UNDEFINED_TRAP_OPCODES),
         "TRAP corpus does not cover every representative undefined form",
     )
 

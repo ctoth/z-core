@@ -204,13 +204,35 @@ def assert_trap_case(sample: dict[str, Any]) -> None:
     machine, observed_io, _current_port_value = make_machine(sample["initial"], None)
     initial = sample["initial"]
     memory = ram_dict(initial)
-    stacked_pc = (initial["pc"] + 2) & 0xFFFF
+    final_memory = ram_dict(expected)
+    pc = initial["pc"]
+    third_opcode = memory[pc] in {0xDD, 0xFD} and memory[(pc + 1) & 0xFFFF] == 0xCB
     expected_events = [
         ("mem_read", initial["pc"], memory[initial["pc"]]),
         ("mem_read", (initial["pc"] + 1) & 0xFFFF, memory[initial["pc"] + 1]),
-        ("mem_write", (initial["sp"] - 1) & 0xFFFF, stacked_pc >> 8),
-        ("mem_write", (initial["sp"] - 2) & 0xFFFF, stacked_pc & 0xFF),
+        (
+            "mem_write",
+            (initial["sp"] - 1) & 0xFFFF,
+            final_memory[(initial["sp"] - 1) & 0xFFFF],
+        ),
+        (
+            "mem_write",
+            (initial["sp"] - 2) & 0xFFFF,
+            final_memory[(initial["sp"] - 2) & 0xFFFF],
+        ),
     ]
+    if third_opcode:
+        displacement_byte = memory[(pc + 2) & 0xFFFF]
+        displacement = displacement_byte if displacement_byte < 0x80 else displacement_byte - 0x100
+        index = initial["iy"] if memory[pc] == 0xFD else initial["ix"]
+        effective_address = (index + displacement) & 0xFFFF
+        expected_events.extend(
+            [
+                ("mem_read", (pc + 3) & 0xFFFF, memory[(pc + 3) & 0xFFFF]),
+                ("mem_read", (pc + 2) & 0xFFFF, displacement_byte),
+                ("mem_read", effective_address, memory.get(effective_address, 0)),
+            ]
+        )
 
     machine.step()
 

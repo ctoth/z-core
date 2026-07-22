@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 
 from spec import (
     INSTRUCTIONS,
-    UNDEFINED_SECOND_OPCODES,
+    UNDEFINED_TRAP_OPCODES,
     Instruction,
     instruction_transition,
     mmu_translate,
@@ -175,21 +175,24 @@ def sequence_inputs(draw: st.DrawFn) -> dict:
 
 
 @st.composite
-def trap_inputs(draw: st.DrawFn, opcode: tuple[int, int]) -> dict:
-    """Generate representative second-opcode undefined-fetch states."""
+def trap_inputs(draw: st.DrawFn, opcode: tuple[int, ...]) -> dict:
+    """Generate representative second- and third-opcode undefined-fetch states."""
 
     state = draw(cpu_states())
-    if opcode not in UNDEFINED_SECOND_OPCODES:
+    if opcode not in UNDEFINED_TRAP_OPCODES:
         raise ValueError(f"opcode {opcode!r} is not a verified undefined form")
     memory = {
         state["pc"]: opcode[0],
         state["pc"] + 1: opcode[1],
     }
+    if len(opcode) == 3:
+        memory[state["pc"] + 2] = draw(byte_values)
+        memory[state["pc"] + 3] = opcode[2]
     state["ram"] = normalized_ram(memory)
     return {"initial": state, "opcode": opcode}
 
 
-any_trap_input = st.sampled_from(UNDEFINED_SECOND_OPCODES).flatmap(trap_inputs)
+any_trap_input = st.sampled_from(UNDEFINED_TRAP_OPCODES).flatmap(trap_inputs)
 
 
 @st.composite
