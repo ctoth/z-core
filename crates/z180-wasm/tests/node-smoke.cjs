@@ -32,6 +32,32 @@ try {
     splitRamMachine.free();
 }
 
+let callbackReads = 0;
+const callbackMachine = new Machine(
+    { regions: [{ base: 0x00000, size: 0x01000, kind: "external" }] },
+    {
+        memRead(address) {
+            callbackReads += 1;
+            if (callbackReads === 1) {
+                throw new Error(`read failed at 0x${address.toString(16)}`);
+            }
+            return 0x00;
+        },
+    },
+);
+try {
+    assert.throws(() => callbackMachine.run(1_000), /read failed at 0x0/);
+    assert.equal(callbackReads, 1);
+    assert.equal(callbackMachine.cycleCount(), 20n);
+    assert.equal(callbackMachine.reg(Reg.PC), 0x0038);
+
+    assert.equal(callbackMachine.step(), 6);
+    assert.equal(callbackReads, 2);
+    assert.equal(callbackMachine.cycleCount(), 26n);
+} finally {
+    callbackMachine.free();
+}
+
 const machine = new Machine({
     regions: [
         { base: 0x00000, size: ROM_SIZE, kind: "rom", data: rom },

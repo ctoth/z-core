@@ -254,6 +254,32 @@ def test_callback_error_propagates_once_and_does_not_remain_pending():
     assert machine.step() > 0
 
 
+def test_run_stops_after_the_instruction_that_raises_a_callback_error():
+    calls = 0
+
+    def mem_read(address):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError(f"read failed at {address:#x}")
+        return 0x00
+
+    machine = z180.Machine(
+        {"regions": [{"base": 0, "size": 0x1000, "kind": "external"}]},
+        mem_read=mem_read,
+    )
+
+    with pytest.raises(RuntimeError, match="read failed at 0x0"):
+        machine.run(1_000)
+    assert calls == 1
+    assert machine.cycle_count() == 20
+    assert machine.reg(z180.Reg.PC) == 0x0038
+
+    assert machine.step() == 6
+    assert calls == 2
+    assert machine.cycle_count() == 26
+
+
 def test_register_lifecycle_interrupt_and_queue_methods():
     machine = machine_with_ram()
     machine.set_reg(z180.Reg.PC, 0x1234)

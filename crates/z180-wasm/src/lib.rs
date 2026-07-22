@@ -411,8 +411,16 @@ impl Machine {
     }
 
     pub fn run(&mut self, cycles: u32) -> Result<u32, JsValue> {
-        let consumed = self.inner.run(cycles);
-        self.return_callback_result(consumed)
+        let mut consumed = 0_u32;
+        while consumed < cycles {
+            let step_cycles = self.inner.step();
+            self.return_callback_result(())?;
+            if step_cycles == 0 {
+                break;
+            }
+            consumed = consumed.saturating_add(step_cycles);
+        }
+        Ok(consumed)
     }
 
     #[wasm_bindgen(js_name = cycleCount)]
