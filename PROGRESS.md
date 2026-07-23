@@ -3628,3 +3628,20 @@ GitHub Actions run `29893414532` is green on P10.5: Ubuntu completed in
 Clippy, default and state tests, and the reference differential gate.
 
 G10: PASS. Phase 10 and the complete v0.1.0 plan are complete.
+
+## QNS direct-migration P8.4 refresh (2026-07-23)
+
+QNS pins published z-core commit
+`9142185ef8d9d9a93d909e422d3a9a287f1d4f02`. The required three-mode
+benchmark was rerun from the z-core root through that exact QNS environment:
+
+```text
+> uv run --project C:\Users\Q\code\qns python bench.py
+mode                 budget       median seconds       cycles/sec
+-------------------  -----------  -----------------  ---------------
+compat callback          800,000           0.278092        2,876,761
+internal memory      102,400,000           0.421575      242,898,947
+old CFFI               6,400,000           0.433808       14,753,074
+```
+
+Internal-memory mode exceeds the required 50,000,000 cycles/second target.
