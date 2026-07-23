@@ -72,6 +72,13 @@ class Z180:
         self._pc_watch_cycle = 0
         self._pc_watch_cbar = 0
         self._cycle_count = 0
+        self._in_callback_step = False
+        self._callback_regs: dict[int, int] = {}
+        self._callback_cbr = 0
+        self._callback_bbr = 0
+        self._callback_cbar = 0xF0
+        self._callback_halted = False
+        self._deferred_irq_states: dict[int, bool] = {}
 
     def reset(self) -> None:
         self._machine.reset()
@@ -80,6 +87,13 @@ class Z180:
         self._csio_pending = None
         self._pc_watch_cycle = 0
         self._pc_watch_cbar = 0
+        self._in_callback_step = False
+        self._callback_regs.clear()
+        self._callback_cbr = 0
+        self._callback_bbr = 0
+        self._callback_cbar = 0xF0
+        self._callback_halted = False
+        self._deferred_irq_states.clear()
 
     def step(self) -> int:
         return self.run(1)
@@ -88,10 +102,24 @@ class Z180:
         consumed = 0
         actual = 0
         while consumed < cycles:
+            for line, state in self._deferred_irq_states.items():
+                self._machine.set_irq(self._IRQ_LINES[line], state)
+            self._deferred_irq_states.clear()
             self._pump_inputs()
             cbar_before = self.cbar
             cycle_before = self._cycle_count
-            step_cycles = self._machine.step()
+            self._callback_regs = {
+                reg: self._machine.reg(mapped) for reg, mapped in self._REGS.items()
+            }
+            self._callback_cbr = self._machine.io_reg_peek(0x38)
+            self._callback_bbr = self._machine.io_reg_peek(0x39)
+            self._callback_cbar = self._machine.io_reg_peek(0x3A)
+            self._callback_halted = self._machine.halted()
+            self._in_callback_step = True
+            try:
+                step_cycles = self._machine.step()
+            finally:
+                self._in_callback_step = False
             self._capture_watch(cbar_before, cycle_before)
             self._drain_outputs()
             if step_cycles == 0:
@@ -107,40 +135,59 @@ class Z180:
         return self._cycle_count
 
     def get_reg(self, reg: int) -> int:
+        if self._in_callback_step:
+            return self._callback_regs.get(reg, 0)
         mapped = self._REGS.get(reg)
         return 0 if mapped is None else self._machine.reg(mapped)
 
     @property
     def pc(self) -> int:
+        if self._in_callback_step:
+            return self._callback_regs[self.PC]
         return self._machine.reg(Reg.PC)
 
     @property
     def instruction_pc(self) -> int:
+        if self._in_callback_step:
+            return self._callback_regs[self.PC]
         return self._machine.instruction_pc()
 
     @property
     def sp(self) -> int:
+        if self._in_callback_step:
+            return self._callback_regs[self.SP]
         return self._machine.reg(Reg.SP)
 
     @property
     def halted(self) -> bool:
+        if self._in_callback_step:
+            return self._callback_halted
         return self._machine.halted()
 
     def set_irq(self, line: int, state: int) -> None:
         mapped = self._IRQ_LINES.get(line)
         if mapped is not None:
-            self._machine.set_irq(mapped, bool(state))
+            if self._in_callback_step:
+                self._deferred_irq_states[line] = bool(state)
+            else:
+                self._machine.set_irq(mapped, bool(state))
 
     @property
     def cbr(self) -> int:
+        if self._in_callback_step:
+            return self._callback_cbr
         return self._machine.io_reg_peek(0x38)
 
     @property
     def bbr(self) -> int:
+        if self._in_callback_step:
+            return self._callback_bbr
         return self._machine.io_reg_peek(0x39)
 
     @property
     def cbar(self) -> int:
+        if self._in_callback_step:
+            return self._callback_cbar
         return self._machine.io_reg_peek(0x3A)
 
     def asci_debug_state(self, channel: int) -> dict[str, int | bool]:

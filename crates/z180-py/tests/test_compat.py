@@ -111,6 +111,55 @@ def test_io_callback_can_read_exact_compatibility_cycle_position():
     assert cpu.cycle_count == 0
 
 
+def test_memory_callback_can_read_incumbent_state_and_change_irq():
+    program = bytes((
+        0x3E,
+        0x42,  # LD A,42h
+        0x32,
+        0x00,
+        0x10,  # LD (1000h),A
+        0x76,  # HALT
+    ))
+    memory = dict(enumerate(program))
+    observed = []
+    cpu = None
+
+    def mem_read(address):
+        return memory.get(address, 0xFF)
+
+    def mem_write(address, value):
+        observed.append({
+            "address": address,
+            "value": value,
+            "cycle": cpu.cycle_count,
+            "instruction_pc": cpu.instruction_pc,
+            "pc": cpu.pc,
+            "hl": cpu.get_reg(cpu.HL),
+            "cbr": cpu.cbr,
+            "bbr": cpu.bbr,
+            "cbar": cpu.cbar,
+            "halted": cpu.halted,
+        })
+        cpu.set_irq(cpu.IRQ2, cpu.ASSERT)
+        memory[address] = value
+
+    cpu = Z180(mem_read=mem_read, mem_write=mem_write)
+    assert cpu.run(100) >= 100
+
+    assert observed == [{
+        "address": 0x1000,
+        "value": 0x42,
+        "cycle": 12,
+        "instruction_pc": 2,
+        "pc": 2,
+        "hl": 0,
+        "cbr": 0,
+        "bbr": 0,
+        "cbar": 0xF0,
+        "halted": False,
+    }]
+
+
 def test_register_irq_mmu_watch_and_debug_compatibility_surface():
     cpu = Z180(mem_read=lambda _address: 0x00)
     assert cpu.clock == 12_288_000
@@ -162,6 +211,12 @@ class FakeQueueMachine:
 
     def io_reg_peek(self, address):
         return 0xF0 if address == 0x3A else 0
+
+    def reg(self, _register):
+        return 0
+
+    def halted(self):
+        return False
 
     def step(self):
         return 3
