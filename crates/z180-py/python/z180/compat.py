@@ -101,11 +101,11 @@ class Z180:
     def run(self, cycles: int) -> int:
         consumed = 0
         actual = 0
+        self._pump_inputs()
         while consumed < cycles:
             for line, state in self._deferred_irq_states.items():
                 self._machine.set_irq(self._IRQ_LINES[line], state)
             self._deferred_irq_states.clear()
-            self._pump_inputs()
             cbar_before = self.cbar
             cycle_before = self._cycle_count
             self._callback_regs = {
