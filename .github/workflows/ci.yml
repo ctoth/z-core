@@ -32,6 +32,8 @@ jobs:
         run: cargo clippy -p z180-core --all-targets --features state -- -D warnings
       - name: Run tests
         run: cargo test --workspace
+      - name: Run independent DAA conformance gate
+        run: cargo run -p z180-cli --release -- sst --dir tests/sst/v1 --only 27
       - name: Run state feature tests
         run: cargo test -p z180-core --features state
       - name: Build Python binding
