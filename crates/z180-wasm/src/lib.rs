@@ -593,7 +593,8 @@ impl Machine {
             .map_err(|error| js_error(error.to_string()))
     }
 
-    pub fn ram(&self, base: u32) -> Result<Uint8Array, JsValue> {
+    #[wasm_bindgen(js_name = ramCopy)]
+    pub fn ram_copy(&self, base: u32) -> Result<Uint8Array, JsValue> {
         self.inner
             .ram_region(base)
             .map(Uint8Array::from)
