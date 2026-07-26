@@ -1,4 +1,5 @@
 import gc
+import threading
 
 import pytest
 
@@ -345,6 +346,32 @@ def test_io_read_error_aborts_before_external_memory_write():
     assert machine.reg(z180.Reg.BC) == 0x0140
     assert machine.reg(z180.Reg.HL) == 0x1000
     assert machine.cycle_count() == 0
+
+
+def test_run_without_callbacks_releases_the_gil():
+    machine = machine_with_ram()
+    machine.ram(0)[:2] = b"\x18\xfe"  # JR -2
+    entered = threading.Event()
+    finished = threading.Event()
+    errors = []
+
+    def run_machine():
+        entered.set()
+        try:
+            machine.run(100_000_000)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=run_machine)
+    worker.start()
+    assert entered.wait(timeout=1)
+
+    assert not finished.wait(timeout=0.05)
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert errors == []
 
 
 def test_run_stops_after_the_instruction_that_raises_a_callback_error():

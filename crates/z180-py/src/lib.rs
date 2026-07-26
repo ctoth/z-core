@@ -26,6 +26,7 @@ use z180_core::{
 
 const EXT_MAP_TABLE_LEN: usize = 1 << 20;
 const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
+const RUN_RESPONSIVENESS_CYCLES: u32 = 1_000_000;
 
 struct PythonBus {
     unmapped_read: u8,
@@ -307,6 +308,7 @@ fn remap_kind(kind: &str, data: Option<Vec<u8>>) -> PyResult<RegionKind> {
 struct Machine {
     inner: Z180<PythonBus>,
     active_views: Arc<AtomicUsize>,
+    has_callbacks: bool,
 }
 
 #[pyclass]
@@ -407,6 +409,8 @@ impl Machine {
         io_write: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let config = parse_config(config_dict)?;
+        let has_callbacks =
+            mem_read.is_some() || mem_write.is_some() || io_read.is_some() || io_write.is_some();
         let bus = PythonBus {
             unmapped_read: config.unmapped_read,
             mem_read,
@@ -418,6 +422,7 @@ impl Machine {
         Ok(Self {
             inner,
             active_views: Arc::new(AtomicUsize::new(0)),
+            has_callbacks,
         })
     }
 
@@ -429,8 +434,26 @@ impl Machine {
         self.inner.try_step()
     }
 
-    fn run(&mut self, cycles: u32) -> PyResult<u32> {
-        self.inner.try_run(cycles)
+    fn run(&mut self, py: Python<'_>, cycles: u32) -> PyResult<u32> {
+        let mut consumed = 0_u32;
+        while consumed < cycles {
+            let chunk_start = consumed;
+            let chunk = cycles
+                .saturating_sub(consumed)
+                .min(RUN_RESPONSIVENESS_CYCLES);
+            let chunk_consumed = if self.has_callbacks {
+                self.inner.try_run(chunk)?
+            } else {
+                py.detach(|| self.inner.try_run(chunk))?
+            };
+            if chunk_consumed == 0 {
+                break;
+            }
+            consumed = consumed.saturating_add(chunk_consumed);
+            debug_assert!(consumed > chunk_start);
+            py.check_signals()?;
+        }
+        Ok(consumed)
     }
 
     fn cycle_count(&self) -> u64 {
@@ -811,6 +834,8 @@ fn _compat_machine(
     io_read: Option<Py<PyAny>>,
     io_write: Option<Py<PyAny>>,
 ) -> PyResult<Machine> {
+    let has_callbacks =
+        mem_read.is_some() || mem_write.is_some() || io_read.is_some() || io_write.is_some();
     let bus = PythonBus {
         unmapped_read: 0xff,
         mem_read,
@@ -830,6 +855,7 @@ fn _compat_machine(
     Ok(Machine {
         inner: Z180::new(config, bus).map_err(config_error)?,
         active_views: Arc::new(AtomicUsize::new(0)),
+        has_callbacks,
     })
 }
 

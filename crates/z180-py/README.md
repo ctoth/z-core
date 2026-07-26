@@ -48,6 +48,12 @@ uv run python basic.py
 calling `remap()` or `load_state()`, because either operation could replace
 their backing storage.
 
+`Machine.run()` releases the GIL in bounded chunks when no host bus callbacks
+were configured, so other Python threads can run concurrently. It reacquires
+the GIL between chunks to process signals such as Ctrl-C. A machine with any
+bus callback stays attached because those callbacks execute Python, but the
+same periodic signal checks still apply.
+
 ## qns integration
 
 The direct qns path keeps 512 KiB of RAM inside z-core and leaves the banked
