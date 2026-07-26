@@ -210,16 +210,6 @@ def assert_trap_case(sample: dict[str, Any]) -> None:
     expected_events = [
         ("mem_read", initial["pc"], memory[initial["pc"]]),
         ("mem_read", (initial["pc"] + 1) & 0xFFFF, memory[initial["pc"] + 1]),
-        (
-            "mem_write",
-            (initial["sp"] - 1) & 0xFFFF,
-            final_memory[(initial["sp"] - 1) & 0xFFFF],
-        ),
-        (
-            "mem_write",
-            (initial["sp"] - 2) & 0xFFFF,
-            final_memory[(initial["sp"] - 2) & 0xFFFF],
-        ),
     ]
     if third_opcode:
         displacement_byte = memory[(pc + 2) & 0xFFFF]
@@ -228,16 +218,30 @@ def assert_trap_case(sample: dict[str, Any]) -> None:
         effective_address = (index + displacement) & 0xFFFF
         expected_events.extend(
             [
-                ("mem_read", (pc + 3) & 0xFFFF, memory[(pc + 3) & 0xFFFF]),
                 ("mem_read", (pc + 2) & 0xFFFF, displacement_byte),
+                ("mem_read", (pc + 3) & 0xFFFF, memory[(pc + 3) & 0xFFFF]),
                 ("mem_read", effective_address, memory.get(effective_address, 0)),
             ]
         )
+    expected_events.extend(
+        [
+            (
+                "mem_write",
+                (initial["sp"] - 1) & 0xFFFF,
+                final_memory[(initial["sp"] - 1) & 0xFFFF],
+            ),
+            (
+                "mem_write",
+                (initial["sp"] - 2) & 0xFFFF,
+                final_memory[(initial["sp"] - 2) & 0xFFFF],
+            ),
+        ]
+    )
 
     machine.step()
 
     assert_machine_state(machine, expected, 0xFF)
-    assert sorted(observed_memory_events(machine)) == sorted(expected_events)
+    assert observed_memory_events(machine) == expected_events
     assert observed_io == []
 
 

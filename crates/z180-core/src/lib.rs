@@ -198,6 +198,7 @@ pub struct Z180<B: HostBus> {
     memory: Memory,
     bus: B,
     instruction_pc: u16,
+    indexed_displacement: Option<i8>,
     cycle_count: u64,
     variant: Variant,
     io_regs: [u8; IO_REGISTER_COUNT],
@@ -344,6 +345,7 @@ impl<B: HostBus> Z180<B> {
             memory: Memory::new(&config)?,
             bus,
             instruction_pc: 0,
+            indexed_displacement: None,
             cycle_count: 0,
             variant: config.variant,
             io_regs,
@@ -407,6 +409,7 @@ impl<B: HostBus> Z180<B> {
     pub fn reset(&mut self) {
         self.registers = Registers::default();
         self.instruction_pc = 0;
+        self.indexed_displacement = None;
         let asci_data = [
             self.io_regs[TDR0],
             self.io_regs[TDR1],
@@ -486,6 +489,7 @@ impl<B: HostBus> Z180<B> {
         reason = "the fetch loop keeps one auditable control path; all indexed hardware tables are bounded before guest-controlled access"
     )]
     pub fn step(&mut self) -> u32 {
+        self.indexed_displacement = None;
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
         self.timing_memory_waits = 0;
@@ -526,6 +530,8 @@ impl<B: HostBus> Z180<B> {
             0xdd => {
                 let opcode = self.read_logical(pc.wrapping_add(1));
                 if opcode == 0xcb {
+                    let displacement = self.read_logical(pc.wrapping_add(2)) as i8;
+                    self.indexed_displacement = Some(displacement);
                     let opcode = self.read_logical(pc.wrapping_add(3));
                     (opcode, Self::DDCB_OPCODES[usize::from(opcode)], 2, true)
                 } else {
@@ -539,6 +545,8 @@ impl<B: HostBus> Z180<B> {
             0xfd => {
                 let opcode = self.read_logical(pc.wrapping_add(1));
                 if opcode == 0xcb {
+                    let displacement = self.read_logical(pc.wrapping_add(2)) as i8;
+                    self.indexed_displacement = Some(displacement);
                     let opcode = self.read_logical(pc.wrapping_add(3));
                     (opcode, Self::FDCB_OPCODES[usize::from(opcode)], 2, true)
                 } else {
@@ -554,7 +562,10 @@ impl<B: HostBus> Z180<B> {
         };
         let Some(handler) = descriptor.handler else {
             if is_indexed_bit {
-                let displacement = self.read_logical(pc.wrapping_add(2)) as i8;
+                let displacement = self
+                    .indexed_displacement
+                    .take()
+                    .expect("indexed-bit displacement was not decoded");
                 let index = if first_opcode == 0xfd {
                     Reg::IY
                 } else {
@@ -1026,6 +1037,7 @@ impl<B: HostBus> Z180<B> {
         self.registers = state.registers;
         self.memory = state.memory;
         self.instruction_pc = state.instruction_pc;
+        self.indexed_displacement = None;
         self.cycle_count = state.cycle_count;
         self.variant = state.variant;
         self.io_regs = io_regs;
@@ -1466,9 +1478,11 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn push_word(&mut self, value: u16) {
-        let new_sp = self.registers.get(Reg::SP).wrapping_sub(2);
-        self.write_word(new_sp, value);
-        self.registers.set(Reg::SP, new_sp);
+        let sp = self.registers.get(Reg::SP);
+        let [low, high] = value.to_le_bytes();
+        self.write_logical(sp.wrapping_sub(1), high);
+        self.write_logical(sp.wrapping_sub(2), low);
+        self.registers.set(Reg::SP, sp.wrapping_sub(2));
     }
 
     fn pop_word(&mut self) -> u16 {
@@ -1875,7 +1889,10 @@ impl<B: HostBus> Z180<B> {
         }
 
         let index_reg = if IY { Reg::IY } else { Reg::IX };
-        let displacement = self.read_logical(self.instruction_pc.wrapping_add(2)) as i8;
+        let displacement = self
+            .indexed_displacement
+            .take()
+            .expect("indexed-bit displacement was not decoded");
         let address = self
             .registers
             .get(index_reg)
@@ -4277,6 +4294,58 @@ mod tests {
     }
 
     #[test]
+    fn stack_push_writes_high_byte_before_low_byte() {
+        let mut cpu = machine();
+        cpu.mem_poke(0, 0xc5);
+        cpu.set_reg(Reg::BC, 0x1234);
+        cpu.set_reg(Reg::SP, 0x2000);
+        let _watch = cpu.add_mem_watch(0, 0x1_0000, WatchKind::Write);
+
+        assert_ne!(cpu.step(), 0);
+        assert_eq!(
+            cpu.drain_events(),
+            vec![
+                Event::MemWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x1fff,
+                    val: 0x12,
+                },
+                Event::MemWrite {
+                    cycle: 0,
+                    pc: 0,
+                    phys: 0x1ffe,
+                    val: 0x34,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn indexed_bit_fetches_displacement_before_sub_opcode_without_duplicate_reads() {
+        for (prefix, index) in [(0xdd, Reg::IX), (0xfd, Reg::IY)] {
+            let mut cpu = machine();
+            for (address, byte) in [prefix, 0xcb, 0x01, 0x46].into_iter().enumerate() {
+                cpu.mem_poke(address as u32, byte);
+            }
+            cpu.mem_poke(0x1001, 0xa5);
+            cpu.set_reg(index, 0x1000);
+            let _watch = cpu.add_mem_watch(0, 0x1_0000, WatchKind::Read);
+
+            assert_ne!(cpu.step(), 0, "prefix {prefix:02x}");
+            let reads = cpu
+                .drain_events()
+                .into_iter()
+                .map(|event| match event {
+                    Event::MemRead { phys, .. } => phys,
+                    other => panic!("unexpected event for prefix {prefix:02x}: {other:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(reads, [0, 1, 2, 3, 0x1001], "prefix {prefix:02x}");
+        }
+    }
+
+    #[test]
     fn event_memory_watch_fires_exactly_on_its_physical_half_open_range() {
         let mut cpu = machine();
         cpu.mem_poke(0x0100, 0x11);
@@ -4666,7 +4735,7 @@ mod tests {
         assert_eq!(
             watched_reads,
             vec![
-                0x1_4000, 0x1_4001, 0x1_4002, 0x1_4003, 0x1_4005, 0x1_4004, 0x1_5001, 0x1_4006,
+                0x1_4000, 0x1_4001, 0x1_4002, 0x1_4003, 0x1_4004, 0x1_4005, 0x1_5001, 0x1_4006,
                 0x1_4007,
             ],
             "tracing observes existing fetches without adding memory reads"
