@@ -26,6 +26,11 @@ git submodule update --init
 cargo run -p z180-cli -- sst --dir tests/sst/v1
 ```
 
+The SST comparison checks every documented flag selected by each case for both
+AF and AF', and all eight bits of R. Flag bits 3 and 5 are excluded because
+their behavior is undocumented on the Z80180 target. `--ignore-r` exists only
+for diagnosing disputed M1 accounting and is not used by conformance gates.
+
 Disassemble the included every-mnemonic fixture:
 
 ```powershell

@@ -815,14 +815,14 @@ fn compare(cpu: &Z180<ScriptedBus>, case: &TestCase, ignore_r: bool) -> Option<F
         difference_u8("l", expected.l, l),
         difference_u8("i", expected.i, i),
         (!ignore_r)
-            .then(|| difference_u8("r", expected.r & 0x7f, r & 0x7f))
+            .then(|| difference_u8("r", expected.r, r))
             .flatten(),
         difference_u16("ix", expected.ix, cpu.reg(Reg::IX)),
         difference_u16("iy", expected.iy, cpu.reg(Reg::IY)),
         difference_u16(
             "af_",
-            mask_pair_flags(expected.af2),
-            mask_pair_flags(cpu.reg(Reg::AF2)),
+            mask_pair_flags(expected.af2, flag_mask),
+            mask_pair_flags(cpu.reg(Reg::AF2), flag_mask),
         ),
         difference_u16("bc_", expected.bc2, cpu.reg(Reg::BC2)),
         difference_u16("de_", expected.de2, cpu.reg(Reg::DE2)),
@@ -936,8 +936,8 @@ const fn pair(high: u8, low: u8) -> u16 {
     u16::from_be_bytes([high, low])
 }
 
-const fn mask_pair_flags(value: u16) -> u16 {
-    value & u16::from_be_bytes([0xff, FLAG_COMPARE_MASK])
+const fn mask_pair_flags(value: u16, flag_mask: u8) -> u16 {
+    value & u16::from_be_bytes([0xff, flag_mask])
 }
 
 fn print_text(report: &RunReport) {
@@ -986,11 +986,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn comparison_masks_xy_flags_and_r_high_bit() {
+    fn comparison_masks_xy_flags() {
         let (mut cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
         cpu.set_reg(Reg::AF, pair(0x12, 0x28));
         cpu.set_reg(Reg::AF2, pair(0x34, 0x28));
-        cpu.set_reg(Reg::IR, pair(0x56, 0x80));
+        cpu.set_reg(Reg::IR, pair(0x56, 0x00));
         let case = standard_case(
             "masked fields",
             TestState {
@@ -1002,6 +1002,18 @@ mod tests {
         );
 
         assert!(compare(&cpu, &case, false).is_none());
+    }
+
+    #[test]
+    fn comparison_reports_r_high_bit() {
+        let (mut cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
+        cpu.set_reg(Reg::IR, pair(0, 0x80));
+        let case = standard_case("R bit 7", zero_state());
+
+        let failure = compare(&cpu, &case, false).expect("R bit 7 must be compared");
+        assert_eq!(failure.field, "r");
+        assert_eq!(failure.expected, "00");
+        assert_eq!(failure.actual, "80");
     }
 
     #[test]
@@ -1026,6 +1038,7 @@ mod tests {
     fn comparison_uses_the_generated_case_flag_mask() {
         let (mut cpu, _) = machine(Vec::new(), 0x1_0000).expect("valid test machine");
         cpu.set_reg(Reg::AF, pair(0, 0x80));
+        cpu.set_reg(Reg::AF2, pair(0, 0x80));
         let mut case = standard_case("masked documented flags", zero_state());
         case.flags_mask = Some(0x42);
 
