@@ -74,3 +74,8 @@ narrows each event to only its valid properties.
 
 ROM data must fill its entire 4 KiB-aligned region. RAM and ROM execute inside
 the core; JavaScript callbacks are used only for `external` regions and I/O.
+
+`ramCopy(base)` returns a detached `Uint8Array` snapshot of one RAM region;
+mutating that array does not change the machine. Use `loadRam(base, data)` to
+replace the complete region explicitly. The supplied array must match the
+region size.

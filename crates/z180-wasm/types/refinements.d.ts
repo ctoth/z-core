@@ -174,7 +174,7 @@ export class Machine {
     ): void;
     setExtMapper(mapper?: ExternalAddressMapper | null): void;
     ramRegions(): RamRegion[];
-    ram(base: number): Uint8Array;
+    ramCopy(base: number): Uint8Array;
     loadRam(base: number, data: Uint8Array): void;
     addMemWatch(base: number, size: number, kind: WatchKind): WatchId;
     removeMemWatch(id: WatchId): void;

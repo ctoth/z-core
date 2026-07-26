@@ -23,10 +23,25 @@ const splitRamMachine = new Machine({
     ],
 });
 try {
+    const ramCopy = splitRamMachine.ramCopy(0x04000);
     assert.equal(
-        splitRamMachine.ram(0x04000).length,
+        ramCopy.length,
         0x01000,
         "a separate nonzero-base RAM region must be exposed",
+    );
+    ramCopy[0] = 0x5a;
+    assert.equal(
+        splitRamMachine.memPeek(0x04000),
+        0,
+        "mutating a RAM copy must not mutate the machine",
+    );
+    const replacement = new Uint8Array(0x01000);
+    replacement[0] = 0xa5;
+    splitRamMachine.loadRam(0x04000, replacement);
+    assert.equal(
+        splitRamMachine.ramCopy(0x04000)[0],
+        0xa5,
+        "loadRam must be the explicit whole-region write path",
     );
 } finally {
     splitRamMachine.free();
