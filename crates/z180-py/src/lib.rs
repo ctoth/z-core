@@ -334,7 +334,9 @@ impl RamView {
         }
 
         let (owner, base, expected_len, active_views) = {
-            let exporter = slf.borrow();
+            let exporter = slf
+                .try_borrow()
+                .map_err(|_| PyRuntimeError::new_err("machine is busy in a callback"))?;
             (
                 exporter.owner.clone_ref(slf.py()),
                 exporter.base,
@@ -343,7 +345,9 @@ impl RamView {
             )
         };
         let ptr = {
-            let mut machine = owner.borrow_mut(slf.py());
+            let mut machine = owner
+                .try_borrow_mut(slf.py())
+                .map_err(|_| PyRuntimeError::new_err("machine is busy in a callback"))?;
             let data = machine
                 .inner
                 .ram_region_mut(base)
@@ -576,7 +580,8 @@ impl Machine {
         } else {
             None
         };
-        slf.borrow_mut(py)
+        slf.try_borrow_mut(py)
+            .map_err(|_| PyRuntimeError::new_err("machine is busy in a callback"))?
             .inner
             .set_ext_map_table(table)
             .map_err(config_error)
@@ -588,7 +593,9 @@ impl Machine {
 
     fn ram(slf: Py<Self>, py: Python<'_>, base: u32) -> PyResult<Py<PyMemoryView>> {
         let (len, active_views) = {
-            let machine = slf.borrow(py);
+            let machine = slf
+                .try_borrow(py)
+                .map_err(|_| PyRuntimeError::new_err("machine is busy in a callback"))?;
             let data = machine
                 .inner
                 .ram_region(base)
