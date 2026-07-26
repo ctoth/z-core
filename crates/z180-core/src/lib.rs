@@ -1014,7 +1014,8 @@ impl<B: HostBus> Z180<B> {
             Some(capacity) => state.insn_trace.len() <= capacity,
             None => state.insn_trace.is_empty(),
         };
-        if state.events.len() > state.event_capacity
+        if state.interrupt_mode > 2
+            || state.events.len() > state.event_capacity
             || state.next_watch_id == 0
             || !insn_trace_is_valid
             || !state.memory.is_valid()
@@ -4116,6 +4117,28 @@ mod tests {
             Err(StateError::Decode)
         );
         assert_eq!(cpu.save_state(), original, "length errors are also atomic");
+    }
+
+    #[cfg(feature = "state")]
+    #[test]
+    fn load_state_rejects_invalid_interrupt_mode_atomically() {
+        let mut cpu = machine();
+        cpu.set_interrupt_mode(1);
+        let original = cpu.save_state();
+        let mut decoded: SavedState = postcard::from_bytes(&original[1..])
+            .expect("freshly saved payload must decode in its own test");
+        decoded.interrupt_mode = 3;
+        let payload =
+            postcard::to_allocvec(&decoded).expect("invalid interrupt mode must still serialize");
+        let mut malformed = vec![STATE_VERSION];
+        malformed.extend_from_slice(&payload);
+
+        assert_eq!(cpu.load_state(&malformed), Err(StateError::Decode));
+        assert_eq!(
+            cpu.save_state(),
+            original,
+            "invalid interrupt mode must not mutate state"
+        );
     }
 
     #[cfg(feature = "state")]
