@@ -160,6 +160,53 @@ def test_memory_callback_can_read_incumbent_state_and_change_irq():
     }]
 
 
+def test_callback_irq_change_is_flushed_before_run_returns(monkeypatch):
+    irq_changes = []
+    callback_pending = True
+    cpu = None
+
+    class CallbackMachine:
+        def io_reg_peek(self, address):
+            return 0xF0 if address == 0x3A else 0
+
+        def reg(self, _register):
+            return 0
+
+        def halted(self):
+            return False
+
+        def step(self):
+            nonlocal callback_pending
+            if callback_pending:
+                callback_pending = False
+                cpu.set_irq(cpu.IRQ2, cpu.ASSERT)
+            return 0
+
+        def set_irq(self, line, state):
+            irq_changes.append((line, state))
+
+        def drain_insn_trace(self):
+            return []
+
+        def asci_tx_pop(self, _channel):
+            return None
+
+        def csio_tx_pop(self):
+            return None
+
+    monkeypatch.setattr(compat, "_compat_machine", lambda *_args: CallbackMachine())
+    cpu = Z180()
+
+    assert cpu.run(1) == 0
+    assert irq_changes == [(compat.IrqLine.Int2, True)]
+
+    cpu.set_irq(cpu.IRQ2, cpu.CLEAR)
+    assert irq_changes[-1] == (compat.IrqLine.Int2, False)
+
+    cpu.run(1)
+    assert irq_changes[-1] == (compat.IrqLine.Int2, False)
+
+
 def test_register_irq_mmu_watch_and_debug_compatibility_surface():
     cpu = Z180(mem_read=lambda _address: 0x00)
     assert cpu.clock == 12_288_000
