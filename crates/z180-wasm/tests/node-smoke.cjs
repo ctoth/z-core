@@ -98,6 +98,46 @@ try {
     debuggerMachine.free();
 }
 
+for (const value of [
+    true,
+    3.5,
+    Number.POSITIVE_INFINITY,
+    "5",
+    null,
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.MIN_SAFE_INTEGER - 1,
+]) {
+    const invalidCallbackMachine = new Machine(
+        { regions: [{ base: 0x00000, size: 0x01000, kind: "external" }] },
+        { memRead() { return value; } },
+    );
+    try {
+        assert.throws(
+            () => invalidCallbackMachine.step(),
+            /memRead callback must return an integer/,
+        );
+    } finally {
+        invalidCallbackMachine.free();
+    }
+}
+
+for (const [value, expectedPc] of [
+    [-1, 0x0038],
+    [Number.MAX_SAFE_INTEGER, 0x0038],
+    [0x100, 0x0001],
+]) {
+    const integerCallbackMachine = new Machine(
+        { regions: [{ base: 0x00000, size: 0x01000, kind: "external" }] },
+        { memRead() { return value; } },
+    );
+    try {
+        assert.ok(integerCallbackMachine.step() > 0);
+        assert.equal(integerCallbackMachine.reg(Reg.PC), expectedPc);
+    } finally {
+        integerCallbackMachine.free();
+    }
+}
+
 const machine = new Machine({
     regions: [
         { base: 0x00000, size: ROM_SIZE, kind: "rom", data: rom },
