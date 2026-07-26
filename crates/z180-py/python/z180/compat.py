@@ -7,6 +7,9 @@ from collections.abc import Callable
 from ._native import IrqLine, Reg, _compat_machine
 
 
+_MAX_SAFE_INTEGER = (1 << 53) - 1
+
+
 class Z180:
     """Callback-backed compatibility wrapper over the z180 core."""
 
@@ -295,6 +298,12 @@ class Z180:
         for channel in range(2):
             if self._serial_pending[channel] is None and self._serial_rx is not None:
                 value = self._serial_rx(channel)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or not -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER
+                ):
+                    raise TypeError("serial_rx callback must return an integer")
                 if value >= 0:
                     self._serial_pending[channel] = value & 0xFF
             pending = self._serial_pending[channel]
@@ -303,6 +312,12 @@ class Z180:
 
         if self._csio_pending is None and self._csio_rx is not None:
             value = self._csio_rx()
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER
+            ):
+                raise TypeError("csio_rx callback must return an integer")
             if value >= 0:
                 self._csio_pending = value & 0xFF
         if self._csio_pending is not None and self._machine.csio_rx_push(

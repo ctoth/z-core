@@ -55,6 +55,13 @@ Keeping ordinary guest RAM inside `z180-core` avoids a host-language callback
 on instruction fetches and data accesses. Hosts use external pages for
 board-owned memory and I/O callbacks for devices outside the Z180 SoC.
 
+Python `mem_read`/`io_read` and WebAssembly `memRead`/`ioRead` callbacks share
+one return-value contract: a non-boolean integer in JavaScript's exact safe
+integer range, `-(2^53 - 1)` through `2^53 - 1`. The binding uses its low
+eight bits. Other values raise an error that names the callback. Compatibility
+`serial_rx` and `csio_rx` use the same integer validation; a negative value
+means no byte is available, while a nonnegative value is masked to one byte.
+
 ## Instruction execution
 
 One `step()` has a fixed ownership order:

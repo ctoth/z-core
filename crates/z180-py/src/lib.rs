@@ -14,10 +14,10 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use pyo3::exceptions::{PyBufferError, PyKeyError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyBufferError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyMemoryView, PyModule};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyMemoryView, PyModule};
 use z180_core::{
     ConfigError, Event, HostBus, IrqLine as CoreIrqLine, IrqSource, MachineConfig, Reg as CoreReg,
     RegionDef, RegionKind, StateError, TraceEntry, Variant, WatchId as CoreWatchId,
@@ -25,6 +25,7 @@ use z180_core::{
 };
 
 const EXT_MAP_TABLE_LEN: usize = 1 << 20;
+const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
 
 struct PythonBus {
     unmapped_read: u8,
@@ -36,13 +37,30 @@ struct PythonBus {
 }
 
 impl PythonBus {
-    fn read_callback(callback: &Option<Py<PyAny>>, address: u32) -> PyResult<Option<u8>> {
+    fn read_callback(
+        callback: &Option<Py<PyAny>>,
+        address: u32,
+        name: &str,
+    ) -> PyResult<Option<u8>> {
         let Some(callback) = callback else {
             return Ok(None);
         };
         Python::attach(|py| {
             let value = callback.bind(py).call1((address,))?;
-            Ok(Some(value.call_method1("__and__", (0xff_u8,))?.extract()?))
+            if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+                return Err(PyTypeError::new_err(format!(
+                    "{name} callback must return an integer"
+                )));
+            }
+            let integer = value.extract::<i64>().map_err(|_| {
+                PyTypeError::new_err(format!("{name} callback must return an integer"))
+            })?;
+            if !(-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&integer) {
+                return Err(PyTypeError::new_err(format!(
+                    "{name} callback must return an integer"
+                )));
+            }
+            Ok(Some((integer & 0xff) as u8))
         })
     }
 
@@ -67,7 +85,7 @@ impl PythonBus {
 
 impl HostBus for PythonBus {
     fn mem_read(&mut self, phys: u32) -> u8 {
-        match Self::read_callback(&self.mem_read, phys) {
+        match Self::read_callback(&self.mem_read, phys, "memRead") {
             Ok(Some(value)) => value,
             Ok(None) => self.unmapped_read,
             Err(error) => {
@@ -84,7 +102,7 @@ impl HostBus for PythonBus {
     }
 
     fn io_read(&mut self, port: u16) -> u8 {
-        match Self::read_callback(&self.io_read, u32::from(port)) {
+        match Self::read_callback(&self.io_read, u32::from(port), "ioRead") {
             Ok(Some(value)) => value,
             Ok(None) => self.unmapped_read,
             Err(error) => {

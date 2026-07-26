@@ -408,6 +408,25 @@ def test_serial_callbacks_adapt_to_queue_retry_and_drain(monkeypatch):
     assert csio_tx == [0x52]
 
 
+@pytest.mark.parametrize("callback_name", ["serial_rx", "csio_rx"])
+@pytest.mark.parametrize("value", [True, 3.0, None, 1 << 53, -(1 << 53)])
+def test_compat_input_callback_requires_a_safe_non_boolean_integer(
+    monkeypatch,
+    callback_name,
+    value,
+):
+    machine = FakeQueueMachine()
+    monkeypatch.setattr(compat, "_compat_machine", lambda *_args: machine)
+    callback = lambda *_args: value
+    cpu = Z180(**{callback_name: callback})
+
+    with pytest.raises(
+        TypeError,
+        match=f"{callback_name} callback must return an integer",
+    ):
+        cpu.step()
+
+
 def test_real_asci_round_trip_accepts_prequeued_compat_input_in_one_run():
     program = bytes((
         0x3E,

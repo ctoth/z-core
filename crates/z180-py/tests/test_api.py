@@ -254,6 +254,44 @@ def test_callback_error_propagates_once_and_does_not_remain_pending():
     assert machine.step() > 0
 
 
+@pytest.mark.parametrize("value", [True, 3.0, None, "5", 1 << 53, -(1 << 53)])
+def test_memory_read_callback_rejects_values_outside_the_shared_integer_contract(
+    value,
+):
+    machine = z180.Machine(
+        {"regions": [{"base": 0, "size": 0x1000, "kind": "external"}]},
+        mem_read=lambda _address: value,
+    )
+
+    with pytest.raises(TypeError, match="memRead callback must return an integer"):
+        machine.step()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_pc"),
+    [(-1, 0x0038), ((1 << 53) - 1, 0x0038), (0x100, 0x0001)],
+)
+def test_memory_read_callback_masks_safe_integers_to_one_byte(value, expected_pc):
+    machine = z180.Machine(
+        {"regions": [{"base": 0, "size": 0x1000, "kind": "external"}]},
+        mem_read=lambda _address: value,
+    )
+
+    assert machine.step() > 0
+    assert machine.reg(z180.Reg.PC) == expected_pc
+
+
+def test_io_read_callback_error_names_the_callback():
+    machine = z180.Machine(
+        {"regions": [RAM_4K]},
+        io_read=lambda _port: True,
+    )
+    machine.ram(0)[:3] = b"\xed\x38\x40"  # IN0 A,(40h)
+
+    with pytest.raises(TypeError, match="ioRead callback must return an integer"):
+        machine.step()
+
+
 def test_run_stops_after_the_instruction_that_raises_a_callback_error():
     calls = 0
 
