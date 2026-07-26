@@ -34,5 +34,24 @@ jobs:
         run: cargo test --workspace
       - name: Run state feature tests
         run: cargo test -p z180-core --features state
+      - name: Build Python binding
+        working-directory: crates/z180-py
+        run: uv run --with maturin maturin develop --release
+      - name: Run Python binding tests
+        working-directory: crates/z180-py
+        run: uv run pytest tests
+      - name: Install wasm-pack
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@v2.85.1
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Build Node.js WebAssembly binding
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: wasm-pack build --target nodejs --scope zcore
+      - name: Run Node.js WebAssembly smoke test
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: node tests/node-smoke.cjs
       - name: Run reference differential gate
         run: uv run --project tools/reference pytest tools/reference/test_differential.py -q --hypothesis-profile=gate
