@@ -280,6 +280,31 @@ def test_run_stops_after_the_instruction_that_raises_a_callback_error():
     assert machine.cycle_count() == 26
 
 
+@pytest.mark.parametrize("operation", ["ram", "set_ext_mapper"])
+def test_reentrant_machine_borrow_raises_a_normal_runtime_error(operation):
+    machine = None
+
+    def mem_read(_address):
+        if operation == "ram":
+            machine.ram(0x1000)
+        else:
+            machine.set_ext_mapper(None)
+        return 0x00
+
+    machine = z180.Machine(
+        {
+            "regions": [
+                {"base": 0, "size": 0x1000, "kind": "external"},
+                {"base": 0x1000, "size": 0x1000, "kind": "ram"},
+            ]
+        },
+        mem_read=mem_read,
+    )
+
+    with pytest.raises(RuntimeError, match="machine is busy in a callback"):
+        machine.step()
+
+
 def test_register_lifecycle_interrupt_and_queue_methods():
     machine = machine_with_ram()
     machine.set_reg(z180.Reg.PC, 0x1234)
