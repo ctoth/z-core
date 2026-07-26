@@ -100,8 +100,10 @@ flowchart LR
 The physical page table spans `2^phys_addr_bits` bytes for widths from 20
 through 24. Initial regions may not overlap. `remap()` replaces pages in an
 existing machine and retires stores that no longer have live pages. Debugging
-`mem_peek` and `mem_poke` use physical addresses and do not trigger memory
-watches.
+`mem_peek` and `mem_poke` use physical addresses and stay entirely within
+core-owned storage: peek reads RAM or ROM and returns the configured unmapped
+byte for External or Unmapped pages, while poke mutates RAM only. Neither
+operation calls `HostBus` or triggers memory watches.
 
 ## Opcode and register tables
 

@@ -1159,12 +1159,19 @@ impl<B: HostBus> Z180<B> {
         self.instruction_pc
     }
 
+    /// Reads core-owned physical RAM or ROM without emulation side effects.
+    ///
+    /// External and unmapped addresses return the configured unmapped byte.
     pub fn mem_peek(&self, phys: u32) -> u8 {
         self.memory.peek(phys)
     }
 
+    /// Writes core-owned physical RAM without emulation side effects.
+    ///
+    /// ROM, External, and unmapped addresses are left unchanged. The debugger
+    /// write never calls [`HostBus`] or emits a memory-watch event.
     pub fn mem_poke(&mut self, phys: u32, value: u8) {
-        self.memory.poke(&mut self.bus, phys, value);
+        self.memory.poke(phys, value);
     }
 
     /// Replaces a page-aligned physical range with a new region kind.
@@ -3456,6 +3463,7 @@ mod tests {
         read_value: u8,
         reads: Vec<u16>,
         writes: Vec<(u16, u8)>,
+        memory_writes: Vec<(u32, u8)>,
     }
 
     impl HostBus for RecordingBus {
@@ -3463,7 +3471,9 @@ mod tests {
             0xff
         }
 
-        fn mem_write(&mut self, _phys: u32, _value: u8) {}
+        fn mem_write(&mut self, phys: u32, value: u8) {
+            self.memory_writes.push((phys, value));
+        }
 
         fn io_read(&mut self, port: u16) -> u8 {
             self.reads.push(port);
@@ -3642,6 +3652,46 @@ mod tests {
         cpu.remap(0x1000, 0x1000, RegionKind::Ram)
             .expect("the ROM page must remap to fresh RAM");
         assert_eq!(cpu.mem_peek(0x1000), 0, "new RAM is zero initialized");
+    }
+
+    #[test]
+    fn debugger_memory_access_stays_with_core_owned_storage() {
+        let config = MachineConfig {
+            unmapped_read: 0xa5,
+            regions: vec![
+                RegionDef {
+                    base: 0,
+                    size: 0x1000,
+                    kind: RegionKind::Ram,
+                },
+                RegionDef {
+                    base: 0x1000,
+                    size: 0x1000,
+                    kind: RegionKind::Rom(vec![0x22; 0x1000]),
+                },
+                RegionDef {
+                    base: 0x2000,
+                    size: 0x1000,
+                    kind: RegionKind::External,
+                },
+            ],
+            ..MachineConfig::default()
+        };
+        let mut cpu =
+            Z180::new(config, RecordingBus::default()).expect("memory layout must be valid");
+        let _ = cpu.add_mem_watch(0, 0x4000, WatchKind::Both);
+
+        cpu.mem_poke(0, 0x11);
+        cpu.mem_poke(0x1000, 0x33);
+        cpu.mem_poke(0x2000, 0x44);
+        cpu.mem_poke(0x3000, 0x55);
+
+        assert_eq!(cpu.mem_peek(0), 0x11);
+        assert_eq!(cpu.mem_peek(0x1000), 0x22);
+        assert_eq!(cpu.mem_peek(0x2000), 0xa5);
+        assert_eq!(cpu.mem_peek(0x3000), 0xa5);
+        assert!(cpu.bus.memory_writes.is_empty());
+        assert!(cpu.drain_events().is_empty());
     }
 
     #[test]
