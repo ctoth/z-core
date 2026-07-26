@@ -103,9 +103,6 @@ class Z180:
         actual = 0
         self._pump_inputs()
         while consumed < cycles:
-            for line, state in self._deferred_irq_states.items():
-                self._machine.set_irq(self._IRQ_LINES[line], state)
-            self._deferred_irq_states.clear()
             cbar_before = self.cbar
             cycle_before = self._cycle_count
             self._callback_regs = {
@@ -120,6 +117,10 @@ class Z180:
                 step_cycles = self._machine.step()
             finally:
                 self._in_callback_step = False
+                deferred_irq_states = self._deferred_irq_states
+                self._deferred_irq_states = {}
+                for line, state in deferred_irq_states.items():
+                    self._machine.set_irq(self._IRQ_LINES[line], state)
             self._capture_watch(cbar_before, cycle_before)
             self._drain_outputs()
             if step_cycles == 0:
@@ -170,6 +171,7 @@ class Z180:
             if self._in_callback_step:
                 self._deferred_irq_states[line] = bool(state)
             else:
+                self._deferred_irq_states.pop(line, None)
                 self._machine.set_irq(mapped, bool(state))
 
     @property
