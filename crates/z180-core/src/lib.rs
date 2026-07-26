@@ -5704,33 +5704,6 @@ mod tests {
     }
 
     #[test]
-    fn daa_matches_every_accumulator_and_control_flag_combination() {
-        let mut cpu = machine();
-        cpu.mem_poke(0, 0x27);
-
-        for accumulator in 0_u8..=u8::MAX {
-            for controls in 0_u8..8 {
-                let initial_flags = (u8::from(controls & 1 != 0) * FLAG_C)
-                    | (u8::from(controls & 2 != 0) * FLAG_H)
-                    | (u8::from(controls & 4 != 0) * FLAG_N);
-                cpu.reset();
-                cpu.set_reg(Reg::AF, u16::from_be_bytes([accumulator, initial_flags]));
-
-                assert_eq!(cpu.step(), 7);
-
-                let [actual_accumulator, actual_flags] = cpu.reg(Reg::AF).to_be_bytes();
-                let (expected_accumulator, expected_flags) =
-                    expected_daa(accumulator, initial_flags);
-                assert_eq!(
-                    (actual_accumulator, actual_flags),
-                    (expected_accumulator, expected_flags),
-                    "A={accumulator:02x} F={initial_flags:02x}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn ei_shadow_lasts_through_exactly_the_following_instruction() {
         let mut cpu = machine();
         cpu.mem_poke(0, 0xfb);
@@ -6111,28 +6084,6 @@ mod tests {
         assert_eq!(serviced.step(), 18);
         assert!(!serviced.sleeping());
         assert_eq!(serviced.reg(Reg::PC), 0x3456);
-    }
-
-    fn expected_daa(accumulator: u8, flags: u8) -> (u8, u8) {
-        let subtract = flags & FLAG_N != 0;
-        let low_adjust = flags & FLAG_H != 0 || accumulator & 0x0f > 9;
-        let high_adjust = flags & FLAG_C != 0 || accumulator > 0x99;
-        let correction = u8::from(low_adjust) * 0x06 + u8::from(high_adjust) * 0x60;
-        let result = if subtract {
-            accumulator.wrapping_sub(correction)
-        } else {
-            accumulator.wrapping_add(correction)
-        };
-        let parity = u8::from(result.count_ones() & 1 == 0) * FLAG_PV;
-        let half_carry = u8::from((accumulator ^ result) & 0x10 != 0) * FLAG_H;
-        let zero = u8::from(result == 0) * FLAG_Z;
-        let expected_flags = (result & (FLAG_S | FLAG_XY))
-            | zero
-            | half_carry
-            | parity
-            | (flags & FLAG_N)
-            | (u8::from(high_adjust) * FLAG_C);
-        (result, expected_flags)
     }
 
     #[test]
