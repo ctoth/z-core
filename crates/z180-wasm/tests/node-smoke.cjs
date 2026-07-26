@@ -73,6 +73,31 @@ try {
     callbackMachine.free();
 }
 
+let debuggerWrites = 0;
+const debuggerMachine = new Machine(
+    {
+        unmappedRead: 0xa5,
+        regions: [{ base: 0x00000, size: 0x01000, kind: "external" }],
+    },
+    {
+        memRead() {
+            return 0x00;
+        },
+        memWrite() {
+            debuggerWrites += 1;
+            throw new Error("debugger poke reached memWrite");
+        },
+    },
+);
+try {
+    debuggerMachine.memPoke(0, 0x5a);
+    assert.equal(debuggerWrites, 0, "debugger poke must bypass memWrite");
+    assert.equal(debuggerMachine.memPeek(0), 0xa5);
+    assert.equal(debuggerMachine.step(), 6, "debugger poke must not defer a callback error");
+} finally {
+    debuggerMachine.free();
+}
+
 const machine = new Machine({
     regions: [
         { base: 0x00000, size: ROM_SIZE, kind: "rom", data: rom },

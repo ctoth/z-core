@@ -339,8 +339,18 @@ impl Memory {
         }
     }
 
-    pub(crate) fn poke<B: HostBus>(&mut self, bus: &mut B, phys: u32, value: u8) {
-        let _ = self.write(bus, phys, value);
+    pub(crate) fn poke(&mut self, phys: u32, value: u8) {
+        let Some((Page::Ram { store, offset }, in_page)) = self.lookup(phys) else {
+            return;
+        };
+        if let Some(byte) = self
+            .ram_stores
+            .get_mut(store)
+            .and_then(Option::as_mut)
+            .and_then(|bytes| bytes.get_mut(offset + in_page))
+        {
+            *byte = value;
+        }
     }
 
     pub(crate) fn ram_regions(&self) -> Vec<(u32, u32)> {
