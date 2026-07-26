@@ -101,8 +101,8 @@ class Z180:
     def run(self, cycles: int) -> int:
         consumed = 0
         actual = 0
-        self._pump_inputs()
         while consumed < cycles:
+            self._pump_inputs()
             cbar_before = self.cbar
             cycle_before = self._cycle_count
             self._callback_regs = {

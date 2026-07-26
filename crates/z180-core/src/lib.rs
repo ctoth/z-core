@@ -2743,6 +2743,14 @@ impl<B: HostBus> Z180<B> {
         } else if spec.write_effect == WriteEffect::AsciCntla {
             self.apply_asci_cntla_write(index - CNTLA0, old);
         } else if spec.write_effect == WriteEffect::AsciCntlb {
+            let channel = index - CNTLB0;
+            if self.asci_rx_shift[channel].is_some()
+                && !self.asci_rx_clocked[channel]
+                && let Some(cycles) = self.asci_frame_cycles(channel)
+            {
+                self.asci_rx_cycles[channel] = cycles;
+                self.asci_rx_clocked[channel] = true;
+            }
             self.update_asci_interrupt_requests();
         } else if spec.write_effect == WriteEffect::AsciStat {
             if index == STAT1 && self.io_regs[STAT1] & 0x04 != 0 {
@@ -5081,6 +5089,19 @@ mod tests {
         assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0);
         cpu.finish_step(1);
         assert_eq!(cpu.read_internal_io(RDR0), 0x33);
+    }
+
+    #[test]
+    fn asci_receive_started_on_external_clock_resumes_when_internal_clock_is_selected() {
+        let mut cpu = machine();
+        cpu.write_internal_io(CNTLA0, 0x64);
+        assert!(cpu.asci_rx_push(0, 0x5a));
+
+        cpu.write_internal_io(CNTLB0, 0x02);
+        cpu.finish_step(6_400);
+
+        assert_eq!(cpu.io_reg_peek(STAT0 as u8) & 0x80, 0x80);
+        assert_eq!(cpu.read_internal_io(RDR0), 0x5a);
     }
 
     #[test]

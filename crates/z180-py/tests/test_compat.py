@@ -312,6 +312,10 @@ def test_serial_callbacks_adapt_to_queue_retry_and_drain(monkeypatch):
         csio_rx=csio_rx,
         csio_tx=csio_tx.append,
     )
+    assert cpu.run(0) == 0
+    assert serial_rx_calls == []
+    assert csio_rx_calls == []
+
     assert cpu.step() == 3
     assert cpu.step() == 3
 
@@ -323,7 +327,7 @@ def test_serial_callbacks_adapt_to_queue_retry_and_drain(monkeypatch):
     assert csio_tx == [0x52]
 
 
-def test_real_asci_round_trip_accepts_prequeued_compat_input():
+def test_real_asci_round_trip_accepts_prequeued_compat_input_in_one_run():
     program = bytes((
         0x3E,
         0x64,  # LD A,64h: 8-N-1, transmit and receive enabled
@@ -351,7 +355,7 @@ def test_real_asci_round_trip_accepts_prequeued_compat_input():
         0x18,
         0xF0,  # JR back to the status read
     ))
-    pending = [0x5A]
+    pending = [0x5A, 0xA5]
     transmitted = []
 
     cpu = Z180(
@@ -359,7 +363,7 @@ def test_real_asci_round_trip_accepts_prequeued_compat_input():
         serial_rx=lambda channel: pending.pop(0) if channel == 0 and pending else -1,
         serial_tx=lambda channel, value: transmitted.append((channel, value)),
     )
-    actual = sum(cpu.run(1_000) for _ in range(200))
+    actual = cpu.run(200_000)
     assert actual >= 200_000
 
-    assert transmitted == [(0, 0x5A)]
+    assert transmitted == [(0, 0x5A), (0, 0xA5)]
