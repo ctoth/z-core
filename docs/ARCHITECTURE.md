@@ -44,16 +44,24 @@ call the host for memory accesses.
 
 ```rust
 pub trait HostBus {
-    fn mem_read(&mut self, phys: u32) -> u8;
-    fn mem_write(&mut self, phys: u32, value: u8);
-    fn io_read(&mut self, port: u16) -> u8;
-    fn io_write(&mut self, port: u16, value: u8);
+    type Error;
+
+    fn mem_read(&mut self, phys: u32) -> Result<u8, Self::Error>;
+    fn mem_write(&mut self, phys: u32, value: u8) -> Result<(), Self::Error>;
+    fn io_read(&mut self, port: u16) -> Result<u8, Self::Error>;
+    fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error>;
 }
 ```
 
 Keeping ordinary guest RAM inside `z180-core` avoids a host-language callback
 on instruction fetches and data accesses. Hosts use external pages for
 board-owned memory and I/O callbacks for devices outside the Z180 SoC.
+`try_step()` and `try_run()` return a fallible bus's original error. The core
+then charges no cycles for the failed instruction, restores its entry
+registers, and suppresses every later memory or I/O effect from that
+instruction. This prevents a failed read from becoming fabricated operand data
+for a later host write. `step()` and `run()` remain the direct API for a bus
+whose error type is `Infallible`.
 
 Python `mem_read`/`io_read` and WebAssembly `memRead`/`ioRead` callbacks share
 one return-value contract: a non-boolean integer in JavaScript's exact safe
@@ -81,7 +89,8 @@ One `step()` has a fixed ownership order:
    monotonic cycle count.
 
 `run(budget)` repeats `step()` until it consumes at least the requested cycle
-budget. It returns the actual count, which can exceed the budget by the final
+budget. `try_run(budget)` has the same loop and stops at the first bus error.
+They return the actual count, which can exceed the budget by the final
 instruction or interrupt. A sleeping machine with no accepted wake source can
 return early when a step consumes zero cycles.
 

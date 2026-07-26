@@ -267,11 +267,11 @@ impl Memory {
         }
     }
 
-    pub(crate) fn read<B: HostBus>(&mut self, bus: &mut B, phys: u32) -> u8 {
+    pub(crate) fn read<B: HostBus>(&mut self, bus: &mut B, phys: u32) -> Result<u8, B::Error> {
         let Some((page, in_page)) = self.lookup(phys) else {
-            return self.unmapped_read;
+            return Ok(self.unmapped_read);
         };
-        match page {
+        Ok(match page {
             Page::Ram { store, offset } => self
                 .ram_stores
                 .get(store)
@@ -286,16 +286,21 @@ impl Memory {
                 .and_then(|bytes| bytes.get(offset + in_page))
                 .copied()
                 .unwrap_or(self.unmapped_read),
-            Page::External => bus.mem_read(phys),
+            Page::External => return bus.mem_read(phys),
             Page::Unmapped => self.unmapped_read,
-        }
+        })
     }
 
-    pub(crate) fn write<B: HostBus>(&mut self, bus: &mut B, phys: u32, value: u8) -> bool {
+    pub(crate) fn write<B: HostBus>(
+        &mut self,
+        bus: &mut B,
+        phys: u32,
+        value: u8,
+    ) -> Result<bool, B::Error> {
         let Some((page, in_page)) = self.lookup(phys) else {
-            return false;
+            return Ok(false);
         };
-        match page {
+        Ok(match page {
             Page::Ram { store, offset } => {
                 if let Some(byte) = self
                     .ram_stores
@@ -308,12 +313,12 @@ impl Memory {
                 false
             }
             Page::External => {
-                bus.mem_write(phys, value);
+                bus.mem_write(phys, value)?;
                 false
             }
             Page::Rom { .. } => true,
             Page::Unmapped => false,
-        }
+        })
     }
 
     pub(crate) fn peek(&self, phys: u32) -> u8 {

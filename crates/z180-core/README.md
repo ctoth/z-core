@@ -22,10 +22,12 @@ use z180_core::{HostBus, MachineConfig, Reg, RegionDef, RegionKind, Z180};
 struct BoardBus;
 
 impl HostBus for BoardBus {
-    fn mem_read(&mut self, _phys: u32) -> u8 { 0xff }
-    fn mem_write(&mut self, _phys: u32, _value: u8) {}
-    fn io_read(&mut self, _port: u16) -> u8 { 0xff }
-    fn io_write(&mut self, _port: u16, _value: u8) {}
+    type Error = std::convert::Infallible;
+
+    fn mem_read(&mut self, _phys: u32) -> Result<u8, Self::Error> { Ok(0xff) }
+    fn mem_write(&mut self, _phys: u32, _value: u8) -> Result<(), Self::Error> { Ok(()) }
+    fn io_read(&mut self, _port: u16) -> Result<u8, Self::Error> { Ok(0xff) }
+    fn io_write(&mut self, _port: u16, _value: u8) -> Result<(), Self::Error> { Ok(()) }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,6 +55,12 @@ RAM and ROM are core-owned. Configure `RegionKind::External` only where a
 board must receive `HostBus::mem_read` and `mem_write` calls. All external I/O
 ports use `HostBus::io_read` and `io_write`; internal-I/O accesses also emit
 their required duplicate external bus cycle.
+
+An infallible bus uses `step()` and `run()` as above. A bus that can fail uses
+`try_step()` and `try_run()`; the core returns its error without charging the
+failed instruction or performing later memory or I/O effects. Debugger
+`mem_poke()` is identical for both kinds of bus because it writes core-owned
+RAM only and never calls the bus.
 
 ## Features
 

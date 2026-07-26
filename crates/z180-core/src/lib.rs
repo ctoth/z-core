@@ -10,6 +10,7 @@
 extern crate alloc;
 
 use alloc::{collections::VecDeque, vec::Vec};
+use core::convert::Infallible;
 
 mod disassembler;
 mod ioregs;
@@ -45,10 +46,12 @@ const FLAG_N: u8 = 0x02;
 const FLAG_C: u8 = 0x01;
 const FLAG_XY: u8 = FLAG_X | FLAG_Y;
 pub trait HostBus {
-    fn mem_read(&mut self, phys: u32) -> u8;
-    fn mem_write(&mut self, phys: u32, value: u8);
-    fn io_read(&mut self, port: u16) -> u8;
-    fn io_write(&mut self, port: u16, value: u8);
+    type Error;
+
+    fn mem_read(&mut self, phys: u32) -> Result<u8, Self::Error>;
+    fn mem_write(&mut self, phys: u32, value: u8) -> Result<(), Self::Error>;
+    fn io_read(&mut self, port: u16) -> Result<u8, Self::Error>;
+    fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,6 +200,7 @@ pub struct Z180<B: HostBus> {
     registers: Registers,
     memory: Memory,
     bus: B,
+    bus_error: Option<B::Error>,
     instruction_pc: u16,
     indexed_displacement: Option<i8>,
     cycle_count: u64,
@@ -344,6 +348,7 @@ impl<B: HostBus> Z180<B> {
             registers: Registers::default(),
             memory: Memory::new(&config)?,
             bus,
+            bus_error: None,
             instruction_pc: 0,
             indexed_displacement: None,
             cycle_count: 0,
@@ -488,7 +493,8 @@ impl<B: HostBus> Z180<B> {
         clippy::too_many_lines,
         reason = "the fetch loop keeps one auditable control path; all indexed hardware tables are bounded before guest-controlled access"
     )]
-    pub fn step(&mut self) -> u32 {
+    pub fn try_step(&mut self) -> Result<u32, B::Error> {
+        debug_assert!(self.bus_error.is_none());
         self.indexed_displacement = None;
         self.timing_branch_taken = false;
         self.timing_repeat_iterations = 0;
@@ -496,26 +502,38 @@ impl<B: HostBus> Z180<B> {
         self.timing_io_waits = 0;
 
         let dma_cycles = self.service_dma();
+        if let Some(error) = self.bus_error.take() {
+            return Err(error);
+        }
         if dma_cycles != 0 {
             self.finish_step(dma_cycles);
         }
 
         if let Some(cycles) = self.interrupt_check_point() {
-            return dma_cycles
-                .saturating_add(self.finish_step(cycles.saturating_add(self.wait_cycles())));
+            if let Some(error) = self.bus_error.take() {
+                return Err(error);
+            }
+            return Ok(dma_cycles
+                .saturating_add(self.finish_step(cycles.saturating_add(self.wait_cycles()))));
         }
 
         if self.halted {
             let _ = self.read_logical(self.registers.get(Reg::PC));
-            return dma_cycles.saturating_add(
+            if let Some(error) = self.bus_error.take() {
+                return Err(error);
+            }
+            return Ok(dma_cycles.saturating_add(
                 self.finish_step(u32::from(HALT_IDLE_CYCLES).saturating_add(self.wait_cycles())),
-            );
+            ));
         }
         if self.sleeping {
-            return dma_cycles;
+            return Ok(dma_cycles);
         }
 
         let pc = self.registers.get(Reg::PC);
+        let registers = self.registers;
+        let ei_shadow = self.ei_shadow;
+        let pc_watch_hits = self.pc_watch_hits;
         if self.pc_watch == Some(pc) {
             self.pc_watch_hits = self.pc_watch_hits.saturating_add(1);
         }
@@ -560,6 +578,13 @@ impl<B: HostBus> Z180<B> {
                 false,
             ),
         };
+        if let Some(error) = self.bus_error.take() {
+            self.registers = registers;
+            self.ei_shadow = ei_shadow;
+            self.pc_watch_hits = pc_watch_hits;
+            self.insn_trace_capture = None;
+            return Err(error);
+        }
         let Some(handler) = descriptor.handler else {
             if is_indexed_bit {
                 let displacement = self
@@ -576,6 +601,13 @@ impl<B: HostBus> Z180<B> {
                     .get(index)
                     .wrapping_add(i16::from(displacement) as u16);
                 let _ = self.read_logical(address);
+                if let Some(error) = self.bus_error.take() {
+                    self.registers = registers;
+                    self.ei_shadow = ei_shadow;
+                    self.pc_watch_hits = pc_watch_hits;
+                    self.insn_trace_capture = None;
+                    return Err(error);
+                }
                 self.take_trap([first_opcode, 0xcb, opcode], 3, pc.wrapping_add(2), true, 3);
             } else if matches!(first_opcode, 0xcb | 0xdd | 0xed | 0xfd) {
                 self.take_trap([first_opcode, opcode, 0], 2, pc.wrapping_add(1), false, 2);
@@ -594,9 +626,9 @@ impl<B: HostBus> Z180<B> {
             } else {
                 SECOND_OPCODE_TRAP_CYCLES
             };
-            return dma_cycles.saturating_add(
+            return Ok(dma_cycles.saturating_add(
                 self.finish_step(u32::from(cycles).saturating_add(self.wait_cycles())),
-            );
+            ));
         };
         debug_assert!(!descriptor.mnemonic.is_empty());
         debug_assert!(descriptor.length != 0);
@@ -613,6 +645,13 @@ impl<B: HostBus> Z180<B> {
         self.ei_shadow = false;
 
         handler(self, opcode);
+        if let Some(error) = self.bus_error.take() {
+            self.registers = registers;
+            self.ei_shadow = ei_shadow;
+            self.pc_watch_hits = pc_watch_hits;
+            self.insn_trace_capture = None;
+            return Err(error);
+        }
         self.finish_insn_trace(descriptor.length);
 
         let repeat_completed = self.registers.get(Reg::PC) != self.instruction_pc;
@@ -625,19 +664,19 @@ impl<B: HostBus> Z180<B> {
                 self.timing_repeat_iterations,
                 repeat_completed,
             );
-        dma_cycles.saturating_add(self.finish_step(cycles.saturating_add(self.wait_cycles())))
+        Ok(dma_cycles.saturating_add(self.finish_step(cycles.saturating_add(self.wait_cycles()))))
     }
 
-    pub fn run(&mut self, cycles: u32) -> u32 {
+    pub fn try_run(&mut self, cycles: u32) -> Result<u32, B::Error> {
         let mut consumed = 0_u32;
         while consumed < cycles {
-            let step_cycles = self.step();
+            let step_cycles = self.try_step()?;
             if step_cycles == 0 {
                 break;
             }
             consumed = consumed.saturating_add(step_cycles);
         }
-        consumed
+        Ok(consumed)
     }
 
     pub fn cycle_count(&self) -> u64 {
@@ -2523,7 +2562,16 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn emulation_mem_read(&mut self, physical: u32) -> u8 {
-        let value = self.memory.read(&mut self.bus, physical);
+        if self.bus_error.is_some() {
+            return 0;
+        }
+        let value = match self.memory.read(&mut self.bus, physical) {
+            Ok(value) => value,
+            Err(error) => {
+                self.bus_error = Some(error);
+                return 0;
+            }
+        };
         if self.mem_watch_matches(physical, WatchKind::Read) {
             self.push_event(Event::MemRead {
                 cycle: self.cycle_count,
@@ -2536,7 +2584,16 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn emulation_mem_write(&mut self, physical: u32, value: u8) {
-        let rom_write = self.memory.write(&mut self.bus, physical, value);
+        if self.bus_error.is_some() {
+            return;
+        }
+        let rom_write = match self.memory.write(&mut self.bus, physical, value) {
+            Ok(rom_write) => rom_write,
+            Err(error) => {
+                self.bus_error = Some(error);
+                return;
+            }
+        };
         if self.mem_watch_matches(physical, WatchKind::Write) {
             self.push_event(Event::MemWrite {
                 cycle: self.cycle_count,
@@ -2578,14 +2635,26 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn read_io(&mut self, port: u16) -> u8 {
+        if self.bus_error.is_some() {
+            return 0;
+        }
         let value = if let Some(index) = self.internal_io_index(port) {
-            let _ = self.bus.io_read(port);
+            if let Err(error) = self.bus.io_read(port) {
+                self.bus_error = Some(error);
+                return 0;
+            }
             self.read_internal_io(index)
         } else {
             self.timing_io_waits = self
                 .timing_io_waits
                 .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
-            self.bus.io_read(port)
+            match self.bus.io_read(port) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.bus_error = Some(error);
+                    return 0;
+                }
+            }
         };
         if self.io_trace {
             self.push_event(Event::IoRead {
@@ -2658,14 +2727,23 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn write_io(&mut self, port: u16, value: u8) {
+        if self.bus_error.is_some() {
+            return;
+        }
         if let Some(index) = self.internal_io_index(port) {
-            self.bus.io_write(port, value);
+            if let Err(error) = self.bus.io_write(port, value) {
+                self.bus_error = Some(error);
+                return;
+            }
             self.write_internal_io(index, value);
         } else {
             self.timing_io_waits = self
                 .timing_io_waits
                 .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
-            self.bus.io_write(port, value);
+            if let Err(error) = self.bus.io_write(port, value) {
+                self.bus_error = Some(error);
+                return;
+            }
         }
         if self.io_trace {
             self.push_event(Event::IoWrite {
@@ -3194,10 +3272,16 @@ impl<B: HostBus> Z180<B> {
         } else {
             self.emulation_mem_read(source)
         };
+        if self.bus_error.is_some() {
+            return 0;
+        }
         if destination_mode == 3 {
             self.dma_io_write(destination as u16, byte);
         } else {
             self.emulation_mem_write(destination, byte);
+        }
+        if self.bus_error.is_some() {
+            return 0;
         }
 
         let memory_waits = u32::from((self.io_regs[DCNTL] >> 6) & 0x03);
@@ -3268,10 +3352,19 @@ impl<B: HostBus> Z180<B> {
 
         if memory_to_io {
             let byte = self.emulation_mem_read(memory);
+            if self.bus_error.is_some() {
+                return 0;
+            }
             self.dma_io_write(io, byte);
         } else {
             let byte = self.dma_io_read(io);
+            if self.bus_error.is_some() {
+                return 0;
+            }
             self.emulation_mem_write(memory, byte);
+        }
+        if self.bus_error.is_some() {
+            return 0;
         }
 
         let memory_waits = u32::from((self.io_regs[DCNTL] >> 6) & 0x03);
@@ -3305,11 +3398,23 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn dma_io_read(&mut self, port: u16) -> u8 {
+        if self.bus_error.is_some() {
+            return 0;
+        }
         let value = if let Some(index) = self.internal_io_index(port) {
-            let _ = self.bus.io_read(port);
+            if let Err(error) = self.bus.io_read(port) {
+                self.bus_error = Some(error);
+                return 0;
+            }
             self.read_internal_io(index)
         } else {
-            self.bus.io_read(port)
+            match self.bus.io_read(port) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.bus_error = Some(error);
+                    return 0;
+                }
+            }
         };
         if self.io_trace {
             self.push_event(Event::IoRead {
@@ -3323,11 +3428,18 @@ impl<B: HostBus> Z180<B> {
     }
 
     fn dma_io_write(&mut self, port: u16, value: u8) {
+        if self.bus_error.is_some() {
+            return;
+        }
         if let Some(index) = self.internal_io_index(port) {
-            self.bus.io_write(port, value);
+            if let Err(error) = self.bus.io_write(port, value) {
+                self.bus_error = Some(error);
+                return;
+            }
             self.write_internal_io(index, value);
-        } else {
-            self.bus.io_write(port, value);
+        } else if let Err(error) = self.bus.io_write(port, value) {
+            self.bus_error = Some(error);
+            return;
         }
         if self.io_trace {
             self.push_event(Event::IoWrite {
@@ -3365,6 +3477,9 @@ impl<B: HostBus> Z180<B> {
                     let mut cycles = 0_u32;
                     for _ in 0..transfers {
                         cycles = cycles.saturating_add(self.dma0_transfer_byte());
+                        if self.bus_error.is_some() {
+                            break;
+                        }
                     }
                     return cycles;
                 }
@@ -3376,6 +3491,9 @@ impl<B: HostBus> Z180<B> {
                     let mut cycles = 0_u32;
                     for _ in 0..transfers {
                         cycles = cycles.saturating_add(self.dma0_transfer_byte());
+                        if self.bus_error.is_some() {
+                            break;
+                        }
                     }
                     return cycles;
                 }
@@ -3439,6 +3557,22 @@ impl<B: HostBus> Z180<B> {
     }
 }
 
+impl<B: HostBus<Error = Infallible>> Z180<B> {
+    pub fn step(&mut self) -> u32 {
+        match self.try_step() {
+            Ok(cycles) => cycles,
+            Err(error) => match error {},
+        }
+    }
+
+    pub fn run(&mut self, cycles: u32) -> u32 {
+        match self.try_run(cycles) {
+            Ok(consumed) => consumed,
+            Err(error) => match error {},
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -3453,17 +3587,23 @@ mod tests {
     struct NullBus;
 
     impl HostBus for NullBus {
-        fn mem_read(&mut self, _phys: u32) -> u8 {
-            0xff
+        type Error = Infallible;
+
+        fn mem_read(&mut self, _phys: u32) -> Result<u8, Self::Error> {
+            Ok(0xff)
         }
 
-        fn mem_write(&mut self, _phys: u32, _value: u8) {}
-
-        fn io_read(&mut self, _port: u16) -> u8 {
-            0xff
+        fn mem_write(&mut self, _phys: u32, _value: u8) -> Result<(), Self::Error> {
+            Ok(())
         }
 
-        fn io_write(&mut self, _port: u16, _value: u8) {}
+        fn io_read(&mut self, _port: u16) -> Result<u8, Self::Error> {
+            Ok(0xff)
+        }
+
+        fn io_write(&mut self, _port: u16, _value: u8) -> Result<(), Self::Error> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -3475,21 +3615,54 @@ mod tests {
     }
 
     impl HostBus for RecordingBus {
-        fn mem_read(&mut self, _phys: u32) -> u8 {
-            0xff
+        type Error = Infallible;
+
+        fn mem_read(&mut self, _phys: u32) -> Result<u8, Self::Error> {
+            Ok(0xff)
         }
 
-        fn mem_write(&mut self, phys: u32, value: u8) {
+        fn mem_write(&mut self, phys: u32, value: u8) -> Result<(), Self::Error> {
             self.memory_writes.push((phys, value));
+            Ok(())
         }
 
-        fn io_read(&mut self, port: u16) -> u8 {
+        fn io_read(&mut self, port: u16) -> Result<u8, Self::Error> {
             self.reads.push(port);
-            self.read_value
+            Ok(self.read_value)
         }
 
-        fn io_write(&mut self, port: u16, value: u8) {
+        fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error> {
             self.writes.push((port, value));
+            Ok(())
+        }
+    }
+
+    struct FailingBus {
+        program: [u8; 5],
+        writes: Vec<(u32, u8)>,
+    }
+
+    impl HostBus for FailingBus {
+        type Error = &'static str;
+
+        fn mem_read(&mut self, phys: u32) -> Result<u8, Self::Error> {
+            if phys == 3 {
+                return Err("operand read failed");
+            }
+            Ok(self.program[phys as usize])
+        }
+
+        fn mem_write(&mut self, phys: u32, value: u8) -> Result<(), Self::Error> {
+            self.writes.push((phys, value));
+            Ok(())
+        }
+
+        fn io_read(&mut self, _port: u16) -> Result<u8, Self::Error> {
+            Ok(0xff)
+        }
+
+        fn io_write(&mut self, _port: u16, _value: u8) -> Result<(), Self::Error> {
+            Ok(())
         }
     }
 
@@ -3503,6 +3676,33 @@ mod tests {
             ..MachineConfig::default()
         };
         Z180::new(config, NullBus).expect("flat RAM configuration must be valid")
+    }
+
+    #[test]
+    fn fallible_bus_read_aborts_before_later_write_and_instruction_commit() {
+        let config = MachineConfig {
+            regions: vec![RegionDef {
+                base: 0,
+                size: 0x1000,
+                kind: RegionKind::External,
+            }],
+            ..MachineConfig::default()
+        };
+        let mut cpu = Z180::new(
+            config,
+            FailingBus {
+                program: [0x3e, 0x5a, 0x32, 0x00, 0x08],
+                writes: Vec::new(),
+            },
+        )
+        .expect("valid external-memory machine");
+        assert!(cpu.try_step().is_ok());
+        let cycle_count = cpu.cycle_count();
+
+        assert_eq!(cpu.try_step(), Err("operand read failed"));
+        assert!(cpu.bus.writes.is_empty());
+        assert_eq!(cpu.reg(Reg::PC), 0x0002);
+        assert_eq!(cpu.cycle_count(), cycle_count);
     }
 
     fn recording_machine(variant: Variant) -> Z180<RecordingBus> {

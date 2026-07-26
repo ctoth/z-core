@@ -19,17 +19,23 @@ pub struct ZexArgs {
 struct NullBus;
 
 impl HostBus for NullBus {
-    fn mem_read(&mut self, _phys: u32) -> u8 {
-        0xff
+    type Error = core::convert::Infallible;
+
+    fn mem_read(&mut self, _phys: u32) -> Result<u8, Self::Error> {
+        Ok(0xff)
     }
 
-    fn mem_write(&mut self, _phys: u32, _value: u8) {}
-
-    fn io_read(&mut self, _port: u16) -> u8 {
-        0xff
+    fn mem_write(&mut self, _phys: u32, _value: u8) -> Result<(), Self::Error> {
+        Ok(())
     }
 
-    fn io_write(&mut self, _port: u16, _value: u8) {}
+    fn io_read(&mut self, _port: u16) -> Result<u8, Self::Error> {
+        Ok(0xff)
+    }
+
+    fn io_write(&mut self, _port: u16, _value: u8) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 pub fn run(args: ZexArgs) -> Result<()> {

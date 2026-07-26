@@ -292,6 +292,61 @@ def test_io_read_callback_error_names_the_callback():
         machine.step()
 
 
+def test_callback_read_error_aborts_instruction_before_host_write():
+    program = bytes((0x3E, 0x5A, 0x32, 0x00, 0x08))
+    writes = []
+
+    def mem_read(address):
+        if address == 3:
+            raise RuntimeError("operand read failed")
+        return program[address]
+
+    machine = z180.Machine(
+        {"regions": [{"base": 0, "size": 0x1000, "kind": "external"}]},
+        mem_read=mem_read,
+        mem_write=lambda address, value: writes.append((address, value)),
+    )
+    assert machine.step() > 0
+    cycle_count = machine.cycle_count()
+
+    with pytest.raises(RuntimeError, match="operand read failed"):
+        machine.step()
+
+    assert writes == []
+    assert machine.reg(z180.Reg.PC) == 0x0002
+    assert machine.cycle_count() == cycle_count
+
+
+def test_io_read_error_aborts_before_external_memory_write():
+    writes = []
+
+    def io_read(_port):
+        raise RuntimeError("port read failed")
+
+    machine = z180.Machine(
+        {
+            "regions": [
+                {"base": 0, "size": 0x1000, "kind": "ram"},
+                {"base": 0x1000, "size": 0x1000, "kind": "external"},
+            ]
+        },
+        mem_write=lambda address, value: writes.append((address, value)),
+        io_read=io_read,
+    )
+    machine.ram(0)[:2] = b"\xed\xa2"  # INI
+    machine.set_reg(z180.Reg.BC, 0x0140)
+    machine.set_reg(z180.Reg.HL, 0x1000)
+
+    with pytest.raises(RuntimeError, match="port read failed"):
+        machine.step()
+
+    assert writes == []
+    assert machine.reg(z180.Reg.PC) == 0
+    assert machine.reg(z180.Reg.BC) == 0x0140
+    assert machine.reg(z180.Reg.HL) == 0x1000
+    assert machine.cycle_count() == 0
+
+
 def test_run_stops_after_the_instruction_that_raises_a_callback_error():
     calls = 0
 
@@ -310,12 +365,12 @@ def test_run_stops_after_the_instruction_that_raises_a_callback_error():
     with pytest.raises(RuntimeError, match="read failed at 0x0"):
         machine.run(1_000)
     assert calls == 1
-    assert machine.cycle_count() == 20
-    assert machine.reg(z180.Reg.PC) == 0x0038
+    assert machine.cycle_count() == 0
+    assert machine.reg(z180.Reg.PC) == 0x0000
 
     assert machine.step() == 6
     assert calls == 2
-    assert machine.cycle_count() == 26
+    assert machine.cycle_count() == 6
 
 
 @pytest.mark.parametrize("operation", ["ram", "set_ext_mapper"])

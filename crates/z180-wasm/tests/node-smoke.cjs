@@ -63,12 +63,12 @@ const callbackMachine = new Machine(
 try {
     assert.throws(() => callbackMachine.run(1_000), /read failed at 0x0/);
     assert.equal(callbackReads, 1);
-    assert.equal(callbackMachine.cycleCount(), 20n);
-    assert.equal(callbackMachine.reg(Reg.PC), 0x0038);
+    assert.equal(callbackMachine.cycleCount(), 0n);
+    assert.equal(callbackMachine.reg(Reg.PC), 0x0000);
 
     assert.equal(callbackMachine.step(), 6);
     assert.equal(callbackReads, 2);
-    assert.equal(callbackMachine.cycleCount(), 26n);
+    assert.equal(callbackMachine.cycleCount(), 6n);
 } finally {
     callbackMachine.free();
 }
@@ -136,6 +136,34 @@ for (const [value, expectedPc] of [
     } finally {
         integerCallbackMachine.free();
     }
+}
+
+const abortProgram = Uint8Array.from([0x3E, 0x5A, 0x32, 0x00, 0x08]);
+const callbackWrites = [];
+const abortMachine = new Machine(
+    { regions: [{ base: 0x00000, size: 0x01000, kind: "external" }] },
+    {
+        memRead(address) {
+            if (address === 3) {
+                throw new Error("operand read failed");
+            }
+            return abortProgram[address];
+        },
+        memWrite(address, value) {
+            callbackWrites.push([address, value]);
+        },
+    },
+);
+try {
+    assert.ok(abortMachine.step() > 0);
+    const cycleCount = abortMachine.cycleCount();
+
+    assert.throws(() => abortMachine.step(), /operand read failed/);
+    assert.deepEqual(callbackWrites, []);
+    assert.equal(abortMachine.reg(Reg.PC), 0x0002);
+    assert.equal(abortMachine.cycleCount(), cycleCount);
+} finally {
+    abortMachine.free();
 }
 
 const machine = new Machine({

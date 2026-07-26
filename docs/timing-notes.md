@@ -38,6 +38,9 @@ progress occurs until a wake source exists. `run(budget)` executes complete
 steps until it reaches or exceeds the requested budget, and returns the actual
 cycles consumed. `cycle_count()` accumulates those cycles from construction;
 `reset()` models hardware reset and does not rewind that elapsed-time clock.
+For a fallible host bus, `try_step()` and `try_run()` use the same accounting
+but return the bus error without charging cycles for the failed instruction.
+No memory or I/O effect after the failed access is performed.
 
 ### Interrupt acknowledge
 
