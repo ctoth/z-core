@@ -11,9 +11,6 @@
     reason = "wasm-bindgen exports owned ABI values and JavaScript-facing Result/getter semantics rather than a native Rust API"
 )]
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -35,60 +32,60 @@ struct JsBus {
     mem_write: Option<Function>,
     io_read: Option<Function>,
     io_write: Option<Function>,
-    callback_error: Rc<RefCell<Option<JsValue>>>,
 }
 
 impl JsBus {
-    fn read_callback(&self, callback: &Option<Function>, address: u32, name: &str) -> u8 {
+    fn read_callback(
+        &self,
+        callback: &Option<Function>,
+        address: u32,
+        name: &str,
+    ) -> Result<u8, JsValue> {
         let Some(callback) = callback else {
-            return self.unmapped_read;
+            return Ok(self.unmapped_read);
         };
-        let result = callback.call1(&JsValue::UNDEFINED, &JsValue::from(address));
-        match result.and_then(|value| callback_byte(value, name)) {
-            Ok(value) => value,
-            Err(error) => {
-                self.record_error(error);
-                self.unmapped_read
-            }
-        }
+        callback
+            .call1(&JsValue::UNDEFINED, &JsValue::from(address))
+            .and_then(|value| callback_byte(value, name))
     }
 
-    fn write_callback(&self, callback: &Option<Function>, address: u32, value: u8, _name: &str) {
+    fn write_callback(
+        &self,
+        callback: &Option<Function>,
+        address: u32,
+        value: u8,
+        _name: &str,
+    ) -> Result<(), JsValue> {
         let Some(callback) = callback else {
-            return;
+            return Ok(());
         };
-        if let Err(error) = callback.call2(
-            &JsValue::UNDEFINED,
-            &JsValue::from(address),
-            &JsValue::from(value),
-        ) {
-            self.record_error(error);
-        }
-    }
-
-    fn record_error(&self, error: JsValue) {
-        let mut pending = self.callback_error.borrow_mut();
-        if pending.is_none() {
-            *pending = Some(error);
-        }
+        callback
+            .call2(
+                &JsValue::UNDEFINED,
+                &JsValue::from(address),
+                &JsValue::from(value),
+            )
+            .map(|_| ())
     }
 }
 
 impl HostBus for JsBus {
-    fn mem_read(&mut self, phys: u32) -> u8 {
+    type Error = JsValue;
+
+    fn mem_read(&mut self, phys: u32) -> Result<u8, Self::Error> {
         self.read_callback(&self.mem_read, phys, "memRead")
     }
 
-    fn mem_write(&mut self, phys: u32, value: u8) {
-        self.write_callback(&self.mem_write, phys, value, "memWrite");
+    fn mem_write(&mut self, phys: u32, value: u8) -> Result<(), Self::Error> {
+        self.write_callback(&self.mem_write, phys, value, "memWrite")
     }
 
-    fn io_read(&mut self, port: u16) -> u8 {
+    fn io_read(&mut self, port: u16) -> Result<u8, Self::Error> {
         self.read_callback(&self.io_read, u32::from(port), "ioRead")
     }
 
-    fn io_write(&mut self, port: u16, value: u8) {
-        self.write_callback(&self.io_write, u32::from(port), value, "ioWrite");
+    fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error> {
+        self.write_callback(&self.io_write, u32::from(port), value, "ioWrite")
     }
 }
 
@@ -184,7 +181,6 @@ pub struct WatchId {
 #[wasm_bindgen(skip_typescript)]
 pub struct Machine {
     inner: Z180<JsBus>,
-    callback_error: Rc<RefCell<Option<JsValue>>>,
 }
 
 fn parse_config(value: Option<JsValue>) -> Result<MachineConfig, JsValue> {
@@ -277,14 +273,12 @@ fn parse_region(value: JsValue, index: usize) -> Result<RegionDef, JsValue> {
 }
 
 fn parse_callbacks(value: Option<JsValue>, unmapped_read: u8) -> Result<JsBus, JsValue> {
-    let callback_error = Rc::new(RefCell::new(None));
     let mut bus = JsBus {
         unmapped_read,
         mem_read: None,
         mem_write: None,
         io_read: None,
         io_write: None,
-        callback_error,
     };
     let Some(value) = value.filter(|value| !value.is_null() && !value.is_undefined()) else {
         return Ok(bus);
@@ -393,12 +387,8 @@ impl Machine {
     pub fn new(config: Option<JsValue>, callbacks: Option<JsValue>) -> Result<Machine, JsValue> {
         let config = parse_config(config)?;
         let bus = parse_callbacks(callbacks, config.unmapped_read)?;
-        let callback_error = Rc::clone(&bus.callback_error);
         let inner = Z180::new(config, bus).map_err(config_error)?;
-        Ok(Self {
-            inner,
-            callback_error,
-        })
+        Ok(Self { inner })
     }
 
     pub fn reset(&mut self) {
@@ -406,21 +396,11 @@ impl Machine {
     }
 
     pub fn step(&mut self) -> Result<u32, JsValue> {
-        let cycles = self.inner.step();
-        self.return_callback_result(cycles)
+        self.inner.try_step()
     }
 
     pub fn run(&mut self, cycles: u32) -> Result<u32, JsValue> {
-        let mut consumed = 0_u32;
-        while consumed < cycles {
-            let step_cycles = self.inner.step();
-            self.return_callback_result(())?;
-            if step_cycles == 0 {
-                break;
-            }
-            consumed = consumed.saturating_add(step_cycles);
-        }
-        Ok(consumed)
+        self.inner.try_run(cycles)
     }
 
     #[wasm_bindgen(js_name = cycleCount)]
@@ -696,15 +676,6 @@ impl Machine {
     #[wasm_bindgen(js_name = isInstructionImplemented)]
     pub fn is_instruction_implemented(opcodes: &[u8]) -> bool {
         Z180::<JsBus>::is_instruction_implemented(opcodes)
-    }
-}
-
-impl Machine {
-    fn return_callback_result<T>(&self, value: T) -> Result<T, JsValue> {
-        if let Some(error) = self.callback_error.borrow_mut().take() {
-            return Err(error);
-        }
-        Ok(value)
     }
 }
 

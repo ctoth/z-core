@@ -11,8 +11,8 @@
 
 use std::ffi::{CString, c_int, c_void};
 use std::ptr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::{PyBufferError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::ffi;
@@ -33,7 +33,6 @@ struct PythonBus {
     mem_write: Option<Py<PyAny>>,
     io_read: Option<Py<PyAny>>,
     io_write: Option<Py<PyAny>>,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
 }
 
 impl PythonBus {
@@ -73,49 +72,28 @@ impl PythonBus {
             Ok(())
         })
     }
-
-    fn record_error(&self, error: PyErr) {
-        if let Ok(mut pending) = self.callback_error.lock()
-            && pending.is_none()
-        {
-            *pending = Some(error);
-        }
-    }
 }
 
 impl HostBus for PythonBus {
-    fn mem_read(&mut self, phys: u32) -> u8 {
-        match Self::read_callback(&self.mem_read, phys, "memRead") {
-            Ok(Some(value)) => value,
-            Ok(None) => self.unmapped_read,
-            Err(error) => {
-                self.record_error(error);
-                self.unmapped_read
-            }
-        }
+    type Error = PyErr;
+
+    fn mem_read(&mut self, phys: u32) -> PyResult<u8> {
+        Ok(Self::read_callback(&self.mem_read, phys, "memRead")?.unwrap_or(self.unmapped_read))
     }
 
-    fn mem_write(&mut self, phys: u32, value: u8) {
-        if let Err(error) = Self::write_callback(&self.mem_write, phys, value) {
-            self.record_error(error);
-        }
+    fn mem_write(&mut self, phys: u32, value: u8) -> PyResult<()> {
+        Self::write_callback(&self.mem_write, phys, value)
     }
 
-    fn io_read(&mut self, port: u16) -> u8 {
-        match Self::read_callback(&self.io_read, u32::from(port), "ioRead") {
-            Ok(Some(value)) => value,
-            Ok(None) => self.unmapped_read,
-            Err(error) => {
-                self.record_error(error);
-                self.unmapped_read
-            }
-        }
+    fn io_read(&mut self, port: u16) -> PyResult<u8> {
+        Ok(
+            Self::read_callback(&self.io_read, u32::from(port), "ioRead")?
+                .unwrap_or(self.unmapped_read),
+        )
     }
 
-    fn io_write(&mut self, port: u16, value: u8) {
-        if let Err(error) = Self::write_callback(&self.io_write, u32::from(port), value) {
-            self.record_error(error);
-        }
+    fn io_write(&mut self, port: u16, value: u8) -> PyResult<()> {
+        Self::write_callback(&self.io_write, u32::from(port), value)
     }
 }
 
@@ -329,7 +307,6 @@ fn remap_kind(kind: &str, data: Option<Vec<u8>>) -> PyResult<RegionKind> {
 struct Machine {
     inner: Z180<PythonBus>,
     active_views: Arc<AtomicUsize>,
-    callback_error: Arc<Mutex<Option<PyErr>>>,
 }
 
 #[pyclass]
@@ -430,20 +407,17 @@ impl Machine {
         io_write: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let config = parse_config(config_dict)?;
-        let callback_error = Arc::new(Mutex::new(None));
         let bus = PythonBus {
             unmapped_read: config.unmapped_read,
             mem_read,
             mem_write,
             io_read,
             io_write,
-            callback_error: Arc::clone(&callback_error),
         };
         let inner = Z180::new(config, bus).map_err(config_error)?;
         Ok(Self {
             inner,
             active_views: Arc::new(AtomicUsize::new(0)),
-            callback_error,
         })
     }
 
@@ -452,21 +426,11 @@ impl Machine {
     }
 
     fn step(&mut self) -> PyResult<u32> {
-        let cycles = self.inner.step();
-        self.return_callback_result(cycles)
+        self.inner.try_step()
     }
 
     fn run(&mut self, cycles: u32) -> PyResult<u32> {
-        let mut consumed = 0_u32;
-        while consumed < cycles {
-            let step_cycles = self.inner.step();
-            self.return_callback_result(())?;
-            if step_cycles == 0 {
-                break;
-            }
-            consumed = consumed.saturating_add(step_cycles);
-        }
-        Ok(consumed)
+        self.inner.try_run(cycles)
     }
 
     fn cycle_count(&self) -> u64 {
@@ -573,9 +537,8 @@ impl Machine {
         self.inner.mem_peek(phys)
     }
 
-    fn mem_poke(&mut self, phys: u32, value: u8) -> PyResult<()> {
+    fn mem_poke(&mut self, phys: u32, value: u8) {
         self.inner.mem_poke(phys, value);
-        self.return_callback_result(())
     }
 
     #[pyo3(signature = (base, size, kind, data=None))]
@@ -711,17 +674,6 @@ impl Machine {
             )));
         }
         Ok(())
-    }
-
-    fn return_callback_result<T>(&self, value: T) -> PyResult<T> {
-        let mut pending = self
-            .callback_error
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("callback error lock is poisoned"))?;
-        if let Some(error) = pending.take() {
-            return Err(error);
-        }
-        Ok(value)
     }
 }
 
@@ -859,14 +811,12 @@ fn _compat_machine(
     io_read: Option<Py<PyAny>>,
     io_write: Option<Py<PyAny>>,
 ) -> PyResult<Machine> {
-    let callback_error = Arc::new(Mutex::new(None));
     let bus = PythonBus {
         unmapped_read: 0xff,
         mem_read,
         mem_write,
         io_read,
         io_write,
-        callback_error: Arc::clone(&callback_error),
     };
     let config = MachineConfig {
         clock_hz: clock,
@@ -880,7 +830,6 @@ fn _compat_machine(
     Ok(Machine {
         inner: Z180::new(config, bus).map_err(config_error)?,
         active_views: Arc::new(AtomicUsize::new(0)),
-        callback_error,
     })
 }
 

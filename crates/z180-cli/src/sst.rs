@@ -206,13 +206,17 @@ struct ScriptedBus {
 }
 
 impl HostBus for ScriptedBus {
-    fn mem_read(&mut self, _phys: u32) -> u8 {
-        0xff
+    type Error = core::convert::Infallible;
+
+    fn mem_read(&mut self, _phys: u32) -> Result<u8, Self::Error> {
+        Ok(0xff)
     }
 
-    fn mem_write(&mut self, _phys: u32, _value: u8) {}
+    fn mem_write(&mut self, _phys: u32, _value: u8) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
-    fn io_read(&mut self, port: u16) -> u8 {
+    fn io_read(&mut self, port: u16) -> Result<u8, Self::Error> {
         let mut script = self.script.borrow_mut();
         let value = script
             .expected
@@ -222,14 +226,15 @@ impl HostBus for ScriptedBus {
         script
             .observed
             .push(PortEvent(port, value, PortDirection::R));
-        value
+        Ok(value)
     }
 
-    fn io_write(&mut self, port: u16, value: u8) {
+    fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error> {
         self.script
             .borrow_mut()
             .observed
             .push(PortEvent(port, value, PortDirection::W));
+        Ok(())
     }
 }
 
@@ -1068,7 +1073,7 @@ mod tests {
             script: Rc::clone(&script),
         };
 
-        assert_eq!(bus.io_read(0x0040), 0x12);
+        assert_eq!(bus.io_read(0x0040), Ok(0x12));
         bus.io_write(0x0041, 0x34);
         assert!(compare_ports(&script.borrow(), "ports").is_none());
     }
