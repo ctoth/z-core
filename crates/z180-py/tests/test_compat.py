@@ -207,6 +207,56 @@ def test_callback_irq_change_is_flushed_before_run_returns(monkeypatch):
     assert irq_changes[-1] == (compat.IrqLine.Int2, False)
 
 
+def test_memory_callback_can_read_compatibility_diagnostics():
+    program = bytes((
+        0x3E,
+        0x42,  # LD A,42h
+        0x32,
+        0x00,
+        0x10,  # LD (1000h),A
+        0x76,  # HALT
+    ))
+    memory = dict(enumerate(program))
+    observed = {}
+    cpu = None
+
+    def mem_write(address, value):
+        observed["debug"] = cpu.asci_debug_state(0)
+        observed["pc_watch_count"] = cpu.pc_watch_count
+        memory[address] = value
+
+    cpu = Z180(
+        mem_read=lambda address: memory.get(address, 0xFF),
+        mem_write=mem_write,
+    )
+    cpu.watch_pc(0)
+    assert cpu.run(100) >= 100
+
+    assert observed["debug"]["status"] == 0x02
+    assert observed["debug"]["cntla"] == 0x10
+    assert observed["debug"]["tx_data_register"] == 0
+    assert observed["pc_watch_count"] == 1
+
+
+@pytest.mark.parametrize("operation", ["reset", "watch_pc"])
+def test_memory_callback_rejects_mutating_compatibility_operations(operation):
+    cpu = None
+
+    def mem_read(_address):
+        with pytest.raises(
+            RuntimeError,
+            match=f"{operation} cannot be called from a callback",
+        ):
+            if operation == "reset":
+                cpu.reset()
+            else:
+                cpu.watch_pc(0)
+        return 0
+
+    cpu = Z180(mem_read=mem_read)
+    assert cpu.step() > 0
+
+
 def test_register_irq_mmu_watch_and_debug_compatibility_surface():
     cpu = Z180(mem_read=lambda _address: 0x00)
     assert cpu.clock == 12_288_000
@@ -249,6 +299,9 @@ def test_register_irq_mmu_watch_and_debug_compatibility_surface():
 
 class FakeQueueMachine:
     def __init__(self):
+        self.reg_reads = 0
+        self.io_reg_reads = []
+        self.halted_reads = 0
         self.asci_pushes = []
         self.csio_pushes = []
         self.asci_attempts = 0
@@ -257,12 +310,15 @@ class FakeQueueMachine:
         self.csio_output = [0x52]
 
     def io_reg_peek(self, address):
+        self.io_reg_reads.append(address)
         return 0xF0 if address == 0x3A else 0
 
     def reg(self, _register):
+        self.reg_reads += 1
         return 0
 
     def halted(self):
+        self.halted_reads += 1
         return False
 
     def step(self):
@@ -288,6 +344,31 @@ class FakeQueueMachine:
 
     def csio_tx_pop(self):
         return self.csio_output.pop(0) if self.csio_output else None
+
+
+def test_run_without_bus_callbacks_skips_callback_snapshots(monkeypatch):
+    machine = FakeQueueMachine()
+    monkeypatch.setattr(compat, "_compat_machine", lambda *_args: machine)
+
+    cpu = Z180()
+    assert cpu.step() == 3
+
+    assert machine.reg_reads == 0
+    assert machine.io_reg_reads == []
+    assert machine.halted_reads == 0
+
+
+def test_serial_output_callback_cannot_reenter_run(monkeypatch):
+    machine = FakeQueueMachine()
+    monkeypatch.setattr(compat, "_compat_machine", lambda *_args: machine)
+    cpu = None
+
+    def serial_tx(_channel, _value):
+        cpu.run(1)
+
+    cpu = Z180(serial_tx=serial_tx)
+    with pytest.raises(RuntimeError, match="run cannot be called reentrantly"):
+        cpu.step()
 
 
 def test_serial_callbacks_adapt_to_queue_retry_and_drain(monkeypatch):

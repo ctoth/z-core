@@ -55,6 +55,10 @@ class Z180:
         csio_tx: Callable[[int], None] | None = None,
     ):
         self.clock = clock
+        self._has_bus_callbacks = any(
+            callback is not None
+            for callback in (mem_read, mem_write, io_read, io_write)
+        )
         self._machine = _compat_machine(
             clock,
             mem_read,
@@ -72,15 +76,20 @@ class Z180:
         self._pc_watch_cycle = 0
         self._pc_watch_cbar = 0
         self._cycle_count = 0
+        self._in_run = False
         self._in_callback_step = False
         self._callback_regs: dict[int, int] = {}
         self._callback_cbr = 0
         self._callback_bbr = 0
         self._callback_cbar = 0xF0
         self._callback_halted = False
+        self._callback_asci_debug = [(0, 0, 0), (0, 0, 0)]
+        self._callback_pc_watch_count = 0
         self._deferred_irq_states: dict[int, bool] = {}
 
     def reset(self) -> None:
+        if self._in_callback_step:
+            raise RuntimeError("reset cannot be called from a callback")
         self._machine.reset()
         self._cycle_count = 0
         self._serial_pending = [None, None]
@@ -93,43 +102,68 @@ class Z180:
         self._callback_bbr = 0
         self._callback_cbar = 0xF0
         self._callback_halted = False
+        self._callback_asci_debug = [(0, 0, 0), (0, 0, 0)]
+        self._callback_pc_watch_count = 0
         self._deferred_irq_states.clear()
 
     def step(self) -> int:
         return self.run(1)
 
     def run(self, cycles: int) -> int:
-        consumed = 0
-        actual = 0
-        while consumed < cycles:
-            self._pump_inputs()
-            cbar_before = self.cbar
-            cycle_before = self._cycle_count
-            self._callback_regs = {
-                reg: self._machine.reg(mapped) for reg, mapped in self._REGS.items()
-            }
-            self._callback_cbr = self._machine.io_reg_peek(0x38)
-            self._callback_bbr = self._machine.io_reg_peek(0x39)
-            self._callback_cbar = self._machine.io_reg_peek(0x3A)
-            self._callback_halted = self._machine.halted()
-            self._in_callback_step = True
-            try:
-                step_cycles = self._machine.step()
-            finally:
-                self._in_callback_step = False
-                deferred_irq_states = self._deferred_irq_states
-                self._deferred_irq_states = {}
-                for line, state in deferred_irq_states.items():
-                    self._machine.set_irq(self._IRQ_LINES[line], state)
-            self._capture_watch(cbar_before, cycle_before)
-            self._drain_outputs()
-            if step_cycles == 0:
-                break
-            credited = min(step_cycles, cycles - consumed)
-            consumed += credited
-            actual += step_cycles
-            self._cycle_count += credited
-        return actual
+        if self._in_run:
+            raise RuntimeError("run cannot be called reentrantly")
+        self._in_run = True
+        try:
+            consumed = 0
+            actual = 0
+            while consumed < cycles:
+                self._pump_inputs()
+                if self._watch_address is not None:
+                    cbar_before = self.cbar
+                    cycle_before = self._cycle_count
+                if self._has_bus_callbacks:
+                    self._callback_regs = {
+                        reg: self._machine.reg(mapped)
+                        for reg, mapped in self._REGS.items()
+                    }
+                    self._callback_cbr = self._machine.io_reg_peek(0x38)
+                    self._callback_bbr = self._machine.io_reg_peek(0x39)
+                    self._callback_cbar = self._machine.io_reg_peek(0x3A)
+                    self._callback_halted = self._machine.halted()
+                    self._callback_asci_debug = [
+                        (
+                            self._machine.io_reg_peek(0x04 + channel),
+                            self._machine.io_reg_peek(channel),
+                            self._machine.io_reg_peek(0x06 + channel),
+                        )
+                        for channel in range(2)
+                    ]
+                    self._callback_pc_watch_count = (
+                        self._machine.pc_watch_hits()
+                        if self._watch_address is not None
+                        else 0
+                    )
+                self._in_callback_step = self._has_bus_callbacks
+                try:
+                    step_cycles = self._machine.step()
+                finally:
+                    self._in_callback_step = False
+                    deferred_irq_states = self._deferred_irq_states
+                    self._deferred_irq_states = {}
+                    for line, state in deferred_irq_states.items():
+                        self._machine.set_irq(self._IRQ_LINES[line], state)
+                if self._watch_address is not None:
+                    self._capture_watch(cbar_before, cycle_before)
+                self._drain_outputs()
+                if step_cycles == 0:
+                    break
+                credited = min(step_cycles, cycles - consumed)
+                consumed += credited
+                actual += step_cycles
+                self._cycle_count += credited
+            return actual
+        finally:
+            self._in_run = False
 
     @property
     def cycle_count(self) -> int:
@@ -202,14 +236,20 @@ class Z180:
         """
         if channel not in (0, 1):
             raise ValueError(f"ASCI channel must be 0 or 1, got {channel}")
+        if self._in_callback_step:
+            status, cntla, tx_data_register = self._callback_asci_debug[channel]
+        else:
+            status = self._machine.io_reg_peek(0x04 + channel)
+            cntla = self._machine.io_reg_peek(channel)
+            tx_data_register = self._machine.io_reg_peek(0x06 + channel)
         return {
-            "status": self._machine.io_reg_peek(0x04 + channel),
+            "status": status,
             "rx_bits_remaining": 0,
             "rx_fifo_depth": 0,
-            "cntla": self._machine.io_reg_peek(channel),
+            "cntla": cntla,
             "tx_bits_remaining": 0,
             "tx_shift_register": 0,
-            "tx_data_register": self._machine.io_reg_peek(0x06 + channel),
+            "tx_data_register": tx_data_register,
             "irq_pending": False,
             "brg_divisor": 0,
             "frame_bits": 0,
@@ -227,6 +267,8 @@ class Z180:
         """No-op because all unsupported transition counters remain zero."""
 
     def watch_pc(self, address: int | None) -> None:
+        if self._in_callback_step:
+            raise RuntimeError("watch_pc cannot be called from a callback")
         if address is not None and not 0 <= address <= 0xFFFF:
             raise ValueError(f"PC watch address must be 0..FFFF, got {address}")
         self._watch_address = address
@@ -237,6 +279,8 @@ class Z180:
 
     @property
     def pc_watch_count(self) -> int:
+        if self._in_callback_step:
+            return self._callback_pc_watch_count
         return self._machine.pc_watch_hits()
 
     @property

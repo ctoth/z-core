@@ -210,6 +210,18 @@ that is available while the callback runs. This is another reason the
 correctness-first qns path is instruction-at-a-time when cycle-sensitive I/O
 is enabled.
 
+The drop-in `z180.compat.Z180` surface provides a narrower compatibility
+contract. When memory or I/O callbacks are configured, it captures the
+instruction-entry registers, MMU registers, halted state, ASCI diagnostic
+registers, and PC-watch count before each native step. Its read-only
+compatibility accessors serve that snapshot from a bus callback, and
+`set_irq()` defers the requested line change until the native borrow ends.
+`reset()` and `watch_pc()` instead raise a named `RuntimeError` from a bus
+callback because they mutate machine configuration. Compatibility `run()` is
+non-reentrant for every callback, including serial and CSI/O queue callbacks.
+When no memory or I/O callback is configured, the compatibility loop does not
+build a callback snapshot.
+
 ## 7. Adapt serial and CSI/O callbacks to queues
 
 Do not pass `serial_rx`, `serial_tx`, `csio_rx`, or `csio_tx` to `Machine`;
