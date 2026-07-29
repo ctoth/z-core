@@ -2,6 +2,14 @@
 
 All notable changes to z-core are documented in this file.
 
+## Unreleased
+
+### Replay and verification
+
+- Added `z180-replay`, an in-process deterministic bus transcript and
+  attempted-step timeline with periodic checkpoints, host-stimulus and output
+  journals, backward seek, and restored first-memory-write probes.
+
 ## 0.1.0 - 2026-07-21
 
 Initial release.

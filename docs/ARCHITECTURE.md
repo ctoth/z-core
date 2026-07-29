@@ -16,6 +16,7 @@ randomness.
 | `crates/z180-core` | `no_std` + `alloc` CPU, memory, MMU, internal I/O, peripherals, interrupts, events, traces, disassembly metadata, and optional save states |
 | `crates/z180-cli` | Raw-binary disassembly and execution, SST conformance execution, and the CP/M ZEX harness |
 | `crates/z180-py` | CPython abi3 module `z180`, including the native `Machine` API and the qns compatibility surface |
+| `crates/z180-replay` | In-process bus transcript, host-input journal, periodic checkpoints, historical seek, and restored write-search probes |
 | `crates/z180-wasm` | Browser and Node.js `Machine` API, strict TypeScript declarations, smoke ROM, and static browser demo |
 | `tools/reference` | Independent UM0050-derived Python transitions, corpus generation, and differential properties; it is a test authority, not runtime code |
 | `tests/sst` and `tests/z180-sst` | Pinned shared-Z80 cases and first-party Z180-specific cases |
@@ -198,6 +199,32 @@ the emulated state.
 The concrete `HostBus` and optional external address mapper are host wiring and
 are not serialized. Loading a state preserves the machine object's existing
 host integration while restoring deterministic emulated state.
+
+## Replay and time travel
+
+`z180-replay` is a host debugging layer rather than CPU state. It owns a
+`Z180<ReplayBus<B>>`, records ordered external memory and I/O accesses, records
+device stimuli and output drains at attempted-step boundaries, and stores
+periodic `z180-core` save-state checkpoints.
+
+Historical playback supplies recorded bus-read values and compares recorded
+writes without calling the live bus. A failed bus operation is replayed at the
+same journal position. Positions count attempted steps rather than successful
+instructions or cycles because a failed step may retain effects completed
+before the failure while restoring its entry registers and charging zero
+cycles; SLP can also produce a successful zero-cycle attempt.
+
+The timeline exposes mutable setup only before recording starts. Once started,
+the machine is read-only to the host and all replayable device inputs pass
+through one recorded `Stimulus` boundary. `seek()` enters playback and cannot
+create a new live branch: the core checkpoint does not contain the host's
+external device state. A host that wants branching must restore that device
+state independently.
+
+`find_first_write()` temporarily seeks, installs a physical memory watch, and
+drains events after every attempted step. It then restores the exact caller
+state, mode, and journal cursor. Event loss is an error, so the search cannot
+return a knowingly incomplete answer.
 
 ## Host surfaces
 

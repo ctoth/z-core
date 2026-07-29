@@ -1,0 +1,10 @@
+[package]
+name = "z180-replay"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+z180-core = { path = "../z180-core", features = ["state"] }
+
+[dev-dependencies]
+proptest = "1"

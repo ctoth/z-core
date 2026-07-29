@@ -836,6 +836,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "z180-replay"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "z180-core",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -43,6 +43,7 @@ corresponding crate:
 - [`z180-core`](crates/z180-core/README.md): native Rust API
 - [`z180-cli`](crates/z180-cli/README.md): disassembler, ROM runner, SST, and ZEX
 - [`z180-py`](crates/z180-py/README.md): Python API and qns integration
+- [`z180-replay`](crates/z180-replay/README.md): deterministic replay and time travel
 - [`z180-wasm`](crates/z180-wasm/README.md): Node.js, browser, and TypeScript
 
 The [architecture](docs/ARCHITECTURE.md) describes the as-built data flow.
