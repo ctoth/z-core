@@ -9,6 +9,9 @@ All notable changes to z-core are documented in this file.
 - Added `z180-replay`, an in-process deterministic bus transcript and
   attempted-step timeline with periodic checkpoints, host-stimulus and output
   journals, backward seek, and restored first-memory-write probes.
+- Added a save-state v4 fixture produced by the released `v0.1.0` source and
+  current-loader tests for byte stability, observable continuation, and
+  atomic rejection of undeclared future versions.
 
 ## 0.1.0 - 2026-07-21
 
