@@ -1,0 +1,33 @@
+name: Nightly differential
+
+on:
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-differential
+  cancel-in-progress: false
+
+jobs:
+  differential:
+    name: 50,000 examples per property
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.1.0
+      - name: Build Python binding
+        working-directory: crates/z180-py
+        run: uv run --with maturin maturin develop --release
+      - name: Run nightly reference differential authority
+        run: >-
+          uv run --project tools/reference pytest
+          tools/reference/test_differential.py -q
+          --hypothesis-profile=nightly

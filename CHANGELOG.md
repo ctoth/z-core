@@ -12,6 +12,9 @@ All notable changes to z-core are documented in this file.
 - Added a save-state v4 fixture produced by the released `v0.1.0` source and
   current-loader tests for byte stability, observable continuation, and
   atomic rejection of undeclared future versions.
+- Scheduled the independent UM0050-derived differential suite nightly at
+  50,000 Hypothesis examples per property, with the same command available by
+  manual workflow dispatch.
 
 ## 0.1.0 - 2026-07-21
 
