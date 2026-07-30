@@ -144,6 +144,8 @@ contain these required operations:
 
 - `extract_module`, shown by clients as `Extract Module`;
 - `move_module_to_file`, shown by Helix as `Extract module to file`;
+- `move_to_mod_rs`, shown by VS Code as
+  `Convert <name>.rs to <name>/mod.rs`;
 - `move_item`, registered by VS Code as `rust-analyzer: Move item up` and
   `rust-analyzer: Move item down`;
 - LSP Rename and semantic import, qualification, unused-import, and visibility
@@ -180,11 +182,23 @@ The LLM control path for VS Code is:
      `13`, to invoke rust-analyzer;
    - after the workspace edit settles, `Input.dispatchKeyEvent` key-down and
      key-up for `s` / `KeyS`, virtual key `83`, modifiers `2` (`Ctrl`) to save.
-4. Read the saved file and raw Git diff only as evidence. The expected change
+4. For rust-analyzer assists exposed through VS Code's Action Widget:
+   - use `Input.dispatchKeyEvent` for `Ctrl+A` only when the assist requires
+     selection of the complete file;
+   - open the Action Widget with `Ctrl+.` using `.` / `Period`, virtual key
+     `190`, modifiers `2`;
+   - inspect the widget text and focused action through read-only CDP
+     `Runtime.evaluate`;
+   - use trusted `ArrowDown` events until the exact rust-analyzer action is
+     focused, then send `Enter`;
+   - save with the `Ctrl+S` sequence above.
+   `move_to_mod_rs` must use this VS Code path because Helix exposes the assist
+   but does not apply its workspace file move.
+5. Read the saved file and raw Git diff only as evidence. The expected change
    is movement of the selected complete Rust item; any textual rewrite or
    unrelated edit rejects the operation.
-5. Run the active compiler/test gate immediately.
-6. At the end of the active slice, save and verify every expected Rust-aware
+6. Run the active compiler/test gate immediately.
+7. At the end of the active slice, save and verify every expected Rust-aware
    edit, then send CDP `Browser.close` to the dedicated instance and verify
    that port `9333` is no longer listening. Do not leave a refactoring debug
    endpoint running between slices.
@@ -205,12 +219,16 @@ Use the following source-mutation protocol inside the active slice:
 4. Name the generated module with LSP Rename; typing the destination name is
    input to that refactoring operation, not permission for source editing.
 5. Apply rust-analyzer `Extract module to file`.
-6. Run the slice's first compiler gate immediately. If the generated move
+6. When the plan requires `<name>/mod.rs`, first let rust-analyzer extract the
+   inline parent as `<name>.rs`, then select the complete file and apply
+   rust-analyzer `Convert <name>.rs to <name>/mod.rs` through the verified
+   VS Code Action Widget path.
+7. Run the slice's first compiler gate immediately. If the generated move
    needs an import, path qualification, unused-import removal, or visibility
    repair, apply only the matching rust-analyzer semantic code action. Never
    select a code-generation action as a substitute for an existing moved
    item.
-7. Run `cargo fmt --all`, inspect the complete raw diff, and continue with the
+8. Run `cargo fmt --all`, inspect the complete raw diff, and continue with the
    slice's remaining gates.
 
 An isolated live smoke test on 2026-07-30 exercised the complete required
@@ -231,6 +249,12 @@ stack in `C:\Users\Q\AppData\Local\Temp\z-core-ra-refactor-smoke`:
   byte-for-byte to starting SHA-256
   `3447ACCF369783A043C54F49CB0E7C4D237A6913B392BFDE2472E43B53837ECA`, and
   `cargo test` passed again.
+- In a fresh Cargo-generated crate at
+  `C:\Users\Q\AppData\Local\Temp\z-core-ra-modrs-smoke`, rust-analyzer first
+  extracted the inline `tests` module to `tests.rs`. The LLM then used the
+  VS Code Action Widget path to invoke
+  `Convert tests.rs to tests/mod.rs`. The resulting source contained
+  `#[cfg(test)] mod tests;` and `src/tests/mod.rs`, and `cargo test` passed.
 
 No human input, generic Rust-source write, custom move script, or text
 replacement was used. The smoke test also proves that rust-analyzer output
