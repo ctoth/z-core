@@ -527,7 +527,7 @@ impl<B: HostBus> Z180<B> {
             ));
         }
         if self.sleeping {
-            return Ok(dma_cycles);
+            return Ok(dma_cycles.saturating_add(self.finish_step(u32::from(HALT_IDLE_CYCLES))));
         }
 
         let pc = self.registers.get(Reg::PC);
@@ -5220,6 +5220,59 @@ mod tests {
     }
 
     #[test]
+    fn sleep_run_advances_time_until_prt_interrupt_wakes_the_cpu() {
+        const PRT_PERIOD_CYCLES: u32 = 40;
+
+        let mut cpu = machine();
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.write_internal_io(IL, 0xa0);
+        cpu.write_internal_io(TMDR0L, 0x01);
+        cpu.write_internal_io(TMDR0H, 0x00);
+        cpu.write_internal_io(RLDR0L, 0x01);
+        cpu.write_internal_io(RLDR0H, 0x00);
+        cpu.write_internal_io(TCR, 0x11);
+        cpu.mem_poke(0, 0xed);
+        cpu.mem_poke(1, 0x76);
+        cpu.mem_poke(0x20a4, 0x56);
+        cpu.mem_poke(0x20a5, 0x34);
+        cpu.set_reg(Reg::IR, 0x2000);
+        cpu.set_reg(Reg::SP, 0x8000);
+        cpu.set_iff1(true);
+
+        assert_eq!(cpu.step(), 8);
+        assert!(cpu.sleeping());
+        let before = cpu.cycle_count();
+
+        let consumed = cpu.run(2 * PRT_PERIOD_CYCLES);
+
+        assert!(consumed >= 2 * PRT_PERIOD_CYCLES);
+        assert_eq!(cpu.cycle_count(), before + u64::from(consumed));
+        assert!(!cpu.sleeping());
+        assert_eq!(cpu.reg(Reg::SP), 0x7ffe, "PRT0 interrupt was taken");
+        assert_eq!(cpu.mem_peek(0x7ffe), 0x02, "return PC is past SLP");
+        assert_eq!(cpu.mem_peek(0x7fff), 0x00);
+    }
+
+    #[test]
+    fn sleep_run_consumes_budget_without_waking_when_interrupts_are_masked() {
+        const BUDGET: u32 = 96;
+
+        let mut cpu = machine();
+        cpu.write_internal_io(DCNTL, 0x00);
+        cpu.mem_poke(0, 0xed);
+        cpu.mem_poke(1, 0x76);
+
+        assert_eq!(cpu.step(), 8);
+        assert!(cpu.sleeping());
+        let before = cpu.cycle_count();
+
+        assert_eq!(cpu.run(BUDGET), BUDGET);
+        assert_eq!(cpu.cycle_count(), before + u64::from(BUDGET));
+        assert!(cpu.sleeping());
+        assert_eq!(cpu.reg(Reg::PC), 2);
+    }
+
+    #[test]
     fn frc_counts_down_once_per_ten_phi_cycles_and_wraps() {
         let mut cpu = machine();
         assert_eq!(cpu.io_reg_peek(FRC as u8), 0xff);
@@ -6355,7 +6408,11 @@ mod tests {
         assert_eq!(sleeping.step(), 8);
         assert!(sleeping.sleeping());
         sleeping.set_irq(IrqLine::Int1, true);
-        assert_eq!(sleeping.step(), 0, "disabled INT1 is ignored");
+        assert_eq!(
+            sleeping.step(),
+            3,
+            "disabled INT1 is ignored while sleep time advances"
+        );
         assert!(sleeping.sleeping());
 
         sleeping.write_internal_io(ITC, 0x03);
