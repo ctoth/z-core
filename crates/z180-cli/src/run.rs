@@ -332,19 +332,14 @@ size = 0x01000
     }
 
     #[test]
-    fn sleeping_cpu_reports_that_the_cycle_budget_cannot_be_reached() {
+    fn sleeping_cpu_consumes_the_requested_cycle_budget() {
         let mut rom = vec![0; 0x1000];
         rom[..2].copy_from_slice(&[0xed, 0x76]);
         let config = parse_config(CONFIG, rom).expect("config must be valid");
         let mut output = Vec::new();
 
-        let error = run_machine(config, 100, false, &mut output)
-            .expect_err("a sleeping CPU cannot complete the cycle budget");
-
-        assert_eq!(
-            error.to_string(),
-            "CPU made no cycle progress at cycle 14 before reaching requested cycle 100"
-        );
+        run_machine(config, 100, false, &mut output)
+            .expect("sleeping CPU time must advance to the cycle budget");
         assert!(output.is_empty());
     }
 }
