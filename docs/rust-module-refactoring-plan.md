@@ -185,7 +185,7 @@ evidence about the active slice; repair or revert that same slice.
 
 ### 1. Split `z180-core` unit tests by responsibility
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
