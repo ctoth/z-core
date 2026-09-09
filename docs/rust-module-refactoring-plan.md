@@ -576,7 +576,7 @@ Split the WebAssembly binding implementation
 
 ### 12. Document final module ownership and run the complete gate
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 

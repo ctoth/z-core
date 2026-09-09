@@ -24,6 +24,26 @@ randomness.
 `z180-core` forbids unsafe code. Its default build has no dependencies. The
 optional `state` feature adds `serde` and `postcard` without enabling `std`.
 
+### Implementation owners
+
+The core keeps the machine layout, lifecycle, and public types in `lib.rs`.
+`access.rs` owns logical memory, bus access, MMU refresh, and internal-I/O
+effects. `interrupts.rs` owns priority and acknowledge transitions; `debug.rs`
+owns watches, events, and instruction tracing; `state.rs` owns the unchanged
+version-4 schema and serialization. Instruction helpers and handlers live in
+`instructions.rs`, `instructions/indexed.rs`, and `instructions/extended.rs`.
+The ASCI, CSI/O, PRT/FRC, and DMA families live under `peripherals/`, coordinated
+by `finish_step` in the root. Unit tests are grouped by these responsibilities
+under `tests/`. `optable.rs` and `ioregs.rs` remain intact metadata authorities.
+
+Replay public types remain at the crate root. `bus.rs` owns transcript access,
+`timeline.rs` owns execution and seeking, and `recording.rs` owns portable
+archives and retention accounting. In the CLI, `debug.rs` and `bench.rs` own
+the debugger and performance report; `sst/` separates models, validated input,
+execution, comparison, reporting, and tests while retaining `sst/policy.rs`.
+Python and WASM each have `bus.rs`, `config.rs`, `machine.rs`, and `events.rs`;
+their root modules retain exposed types and registration/declaration metadata.
+
 ## Core ownership
 
 `Z180<B: HostBus>` owns all state that can affect deterministic execution:
