@@ -7,6 +7,8 @@
     reason = "Clap transfers ownership of parsed command arguments to the selected command runner"
 )]
 
+mod bench;
+mod debug;
 mod dis;
 mod run;
 mod sst;
@@ -25,6 +27,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Repeated, self-contained execution and replay measurements (JSON).
+    Bench(bench::BenchArgs),
+    /// Inspect firmware, rewind execution, and export reproducible sessions.
+    Debug(debug::DebugArgs),
     /// Disassemble a raw Z180 binary.
     Dis(dis::DisArgs),
     /// Run a bare ROM using a TOML machine configuration.
@@ -37,6 +43,8 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Bench(args) => bench::run(args),
+        Command::Debug(args) => debug::run(args),
         Command::Dis(args) => dis::run(args),
         Command::Run(args) => run::run(args),
         Command::Sst(args) => sst::run(args),

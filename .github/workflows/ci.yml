@@ -36,6 +36,8 @@ jobs:
         run: cargo run -p z180-cli --release -- sst --dir tests/sst/v1 --only 27
       - name: Run state feature tests
         run: cargo test -p z180-core --features state
+      - name: Run Z180 conformance corpus
+        run: cargo run -p z180-cli --release -- sst --dir tests/z180-sst
       - name: Build Python binding
         working-directory: crates/z180-py
         run: uv run --with maturin maturin develop --release
@@ -55,5 +57,25 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: crates/z180-wasm
         run: node tests/node-smoke.cjs
+      - name: Install browser and TypeScript test tools
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: npm ci
+      - name: Check TypeScript consumer
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: npm run typecheck
+      - name: Build browser package
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: wasm-pack build --target web --out-dir pkg-web --scope zcore
+      - name: Install browser
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: npx playwright install --with-deps chromium
+      - name: Exercise browser debugger workflow
+        if: runner.os == 'Linux'
+        working-directory: crates/z180-wasm
+        run: npm run test:browser
       - name: Run reference differential gate
         run: uv run --project tools/reference pytest tools/reference/test_differential.py -q --hypothesis-profile=gate

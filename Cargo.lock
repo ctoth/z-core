@@ -816,6 +816,7 @@ dependencies = [
  "serde_json",
  "toml",
  "z180-core",
+ "z180-replay",
 ]
 
 [[package]]
@@ -840,6 +841,8 @@ name = "z180-replay"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "serde",
+ "serde_json",
  "z180-core",
 ]
 

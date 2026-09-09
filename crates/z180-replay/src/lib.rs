@@ -2,6 +2,8 @@
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
+mod recording;
+
 use z180_core::{
     ConfigError, Event, HostBus, IrqLine, MachineConfig, StateError, TraceEntry, WatchKind, Z180,
 };
@@ -13,7 +15,7 @@ pub enum Mode {
     Playback,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BusAccess {
     MemRead { address: u32 },
     MemWrite { address: u32, value: u8 },
@@ -52,7 +54,7 @@ impl<E: core::fmt::Display> core::fmt::Display for ReplayBusError<E> {
 
 impl<E: core::error::Error + 'static> core::error::Error for ReplayBusError<E> {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct BusRecord {
     access: BusAccess,
     read_value: Option<u8>,
@@ -355,7 +357,7 @@ fn widen_infallible_error<E>(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Position {
     pub attempted_steps: u64,
     pub cycle: u64,
@@ -363,7 +365,7 @@ pub struct Position {
     pub bus_records: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Options {
     pub checkpoint_interval_attempts: u64,
     pub max_checkpoints: usize,
@@ -425,6 +427,10 @@ pub enum TimelineError<E> {
     },
     EventHistoryLost,
     RestoreFailed(StateError),
+    RetentionLimit {
+        bytes: usize,
+        limit: usize,
+    },
 }
 
 impl<E: core::fmt::Display> core::fmt::Display for TimelineError<E> {
@@ -455,6 +461,10 @@ impl<E: core::fmt::Display> core::fmt::Display for TimelineError<E> {
             Self::EventHistoryLost => {
                 write!(formatter, "event history was lost during the write probe")
             }
+            Self::RetentionLimit { bytes, limit } => write!(
+                formatter,
+                "recording uses {bytes} bytes; retention limit is {limit}; export before continuing"
+            ),
             Self::RestoreFailed(error) => {
                 write!(formatter, "failed to restore state after probe: {error}")
             }
@@ -464,7 +474,7 @@ impl<E: core::fmt::Display> core::fmt::Display for TimelineError<E> {
 
 impl<E: core::error::Error + 'static> core::error::Error for TimelineError<E> {}
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Stimulus {
     Irq { line: IrqLine, level: bool },
     Nmi(bool),
@@ -475,13 +485,13 @@ pub enum Stimulus {
     AsciDcd { channel: usize, level: bool },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StimulusOutcome {
     Applied,
     Rejected,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Output {
     AsciTx(usize),
     CsioTx,
@@ -489,14 +499,14 @@ pub enum Output {
     InstructionTrace,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Drained {
     Byte(Option<u8>),
     Events(Vec<Event>),
     InstructionTrace(Vec<TraceEntry>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 enum RecordedAction {
     Stimulus {
         stimulus: Stimulus,
@@ -508,25 +518,25 @@ enum RecordedAction {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ActionRecord {
     attempted_step: u64,
     action: RecordedAction,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 enum AttemptOutcome {
     Success(u32),
     HostFailure { bus_record: usize },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct AttemptRecord {
     outcome: AttemptOutcome,
     end: Position,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Checkpoint {
     position: Position,
     state: Vec<u8>,
@@ -545,8 +555,10 @@ pub struct Timeline<B: HostBus> {
     mode: Mode,
     position: Position,
     actions: Vec<ActionRecord>,
+    action_heap_bytes: usize,
     attempts: Vec<AttemptRecord>,
     checkpoints: VecDeque<Checkpoint>,
+    byte_limit: Option<usize>,
 }
 
 impl<B: HostBus> Timeline<B> {
@@ -576,8 +588,10 @@ impl<B: HostBus> Timeline<B> {
                 bus_records: 0,
             },
             actions: Vec::new(),
+            action_heap_bytes: 0,
             attempts: Vec::new(),
             checkpoints: VecDeque::new(),
+            byte_limit: None,
         })
     }
 
@@ -600,6 +614,7 @@ impl<B: HostBus> Timeline<B> {
         }
         self.bus.begin_live().map_err(map_control_error)?;
         self.actions.clear();
+        self.action_heap_bytes = 0;
         self.attempts.clear();
         self.checkpoints.clear();
         self.mode = Mode::Live;
@@ -640,6 +655,7 @@ impl<B: HostBus> Timeline<B> {
                 actual: self.mode,
             });
         }
+        self.check_retention()?;
         let outcome = execute_stimulus(&mut self.machine, &stimulus);
         self.actions.push(ActionRecord {
             attempted_step: self.position.attempted_steps,
@@ -656,7 +672,13 @@ impl<B: HostBus> Timeline<B> {
                 actual: self.mode,
             });
         }
+        self.check_retention()?;
         let drained = execute_drain(&mut self.machine, &output);
+        self.action_heap_bytes += match &drained {
+            Drained::Events(events) => events.len() * size_of::<Event>(),
+            Drained::InstructionTrace(trace) => trace.len() * size_of::<TraceEntry>(),
+            Drained::Byte(_) => 0,
+        };
         self.actions.push(ActionRecord {
             attempted_step: self.position.attempted_steps,
             action: RecordedAction::Drain {
@@ -692,6 +714,7 @@ impl<B: HostBus> Timeline<B> {
     }
 
     fn try_step_live(&mut self) -> Result<u32, TimelineError<B::Error>> {
+        self.check_retention()?;
         let result = self.machine.try_step();
         self.position.attempted_steps = self.position.attempted_steps.saturating_add(1);
         self.position.cycle = self.machine.cycle_count();
@@ -738,7 +761,19 @@ impl<B: HostBus> Timeline<B> {
             return Err(TimelineError::InvalidCheckpoint);
         }
         if self.checkpoints.len() == self.options.max_checkpoints {
-            let _ = self.checkpoints.remove(1);
+            // Preserve coverage across history, not only the initial and newest states.
+            let index = (1..self.checkpoints.len())
+                .min_by_key(|&i| {
+                    let next = self
+                        .checkpoints
+                        .get(i + 1)
+                        .map_or(self.position.attempted_steps, |cp| {
+                            cp.position.attempted_steps
+                        });
+                    next - self.checkpoints[i - 1].position.attempted_steps
+                })
+                .expect("at least two checkpoints");
+            let _ = self.checkpoints.remove(index);
         }
         self.checkpoints.push_back(Checkpoint {
             position: self.position,
@@ -870,7 +905,7 @@ impl<B: HostBus> Timeline<B> {
                 .machine
                 .drain_events()
                 .into_iter()
-                .find(|event| matches!(event, Event::MemWrite { .. }))
+                .find(|event| matches!(event, Event::MemWrite { phys, .. } if *phys >= base && u64::from(*phys) < u64::from(base) + u64::from(size)))
             {
                 return Ok(Some(WriteHit {
                     attempted_step,
@@ -1182,6 +1217,77 @@ mod tests {
             checkpoint_interval_attempts: interval,
             max_checkpoints: 8,
         }
+    }
+
+    #[test]
+    fn recording_round_trip_rewinds_and_rejects_forged_checkpoint() {
+        let mut timeline = Timeline::new(ram_config(0x1000), NullBus, options(2)).unwrap();
+        timeline.setup().unwrap().mem_poke(0, 0x3c);
+        timeline.start().unwrap();
+        for _ in 0..20 {
+            timeline.try_step().unwrap();
+        }
+        let expected = timeline.machine().save_state();
+        let data = timeline.export_recording().unwrap();
+        let mut restored = Timeline::import_recording(&data, NullBus).unwrap();
+        assert_eq!(restored.mode(), Mode::Playback);
+        assert_eq!(restored.machine().save_state(), expected);
+        restored
+            .seek(restored.position_at_attempt(0).unwrap())
+            .unwrap();
+        for _ in 0..20 {
+            restored.try_step().unwrap();
+        }
+        assert_eq!(restored.machine().save_state(), expected);
+        assert!(restored.try_step().is_err());
+        let mut forged: serde_json::Value = serde_json::from_slice(&data).unwrap();
+        forged["checkpoints"][1]["state"][0] = 255.into();
+        assert!(
+            Timeline::import_recording(&serde_json::to_vec(&forged).unwrap(), NullBus).is_err()
+        );
+    }
+
+    #[test]
+    fn write_probe_filters_preexisting_watches() {
+        let mut timeline = Timeline::new(ram_config(0x2000), NullBus, options(2)).unwrap();
+        for (address, byte) in [0x32, 0x00, 0x10].into_iter().enumerate() {
+            timeline.setup().unwrap().mem_poke(address as u32, byte);
+        }
+        timeline
+            .setup()
+            .unwrap()
+            .add_mem_watch(0, 0x2000, WatchKind::Write);
+        timeline.start().unwrap();
+        let start = timeline.position();
+        timeline.try_step().unwrap();
+        assert!(
+            timeline
+                .find_first_write(start, timeline.position(), 0x1001, 1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            timeline
+                .find_first_write(start, timeline.position(), 0x1000, 1)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn retention_stops_before_mutation_and_export_remains_available() {
+        let mut timeline = Timeline::new(ram_config(0x1000), NullBus, options(2)).unwrap();
+        timeline.start().unwrap();
+        timeline.set_byte_limit(Some(timeline.retained_bytes()));
+        let before = timeline.position();
+        assert!(matches!(
+            timeline.try_step(),
+            Err(TimelineError::RetentionLimit { .. })
+        ));
+        assert_eq!(timeline.position(), before);
+        assert!(timeline.export_recording().is_ok());
+        timeline.set_byte_limit(None);
+        timeline.try_step().unwrap();
     }
 
     #[test]

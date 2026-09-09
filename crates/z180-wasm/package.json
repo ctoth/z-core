@@ -1,0 +1,13 @@
+{
+  "name": "z180-workbench-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:browser": "node tests/browser-smoke.mjs",
+    "typecheck": "tsc --noEmit --project types/tsconfig.json"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2",
+    "typescript": "5.9.3"
+  }
+}

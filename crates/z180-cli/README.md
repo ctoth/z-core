@@ -4,6 +4,24 @@
 It disassembles raw binaries, runs configured ROMs, executes the SST
 conformance corpora, and hosts CP/M ZEX programs.
 
+## Debug firmware
+
+`cargo run --release -p z180-cli -- debug` opens the bundled RAM counter.
+Use `--rom image.bin` for a ROM mapped at zero with RAM after its padded ROM
+region, or `--replay session.json` for an exported recording. This is a bare
+board: external reads return 0xff and writes are discarded.
+
+Try `run`, `back`, `regs`, `mem 0x1000`, `mmu`, `find-write 0x1000`, and
+`export session.json`. `break 0x0006` sets a logical-PC breakpoint; `watch
+0x1000` stops on a physical write. `seek 3` seeks to an attempted-step
+boundary. `help` lists all commands. Commands also accept piped stdin for
+reproducible scripts. EOF exits.
+
+Rewinding permanently enters playback; it does not rewind external devices
+or authorize a new live branch. The default recording threshold is 64 MiB,
+configurable with `--memory-mib`. Export remains available after the threshold
+stops recording. One attempted step or host action may exceed the threshold.
+
 ## Disassemble a binary
 
 Run this from the repository root against the included every-mnemonic fixture:

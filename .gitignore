@@ -1,5 +1,6 @@
 /target/
 /crates/z180-wasm/pkg/
+/crates/z180-wasm/pkg-web/
 /docs/vendor/*.pdf
 *.pyd
 *.pdb

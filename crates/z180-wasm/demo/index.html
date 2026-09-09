@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>z180-wasm demo</title>
+    <title>Z180 firmware workbench</title>
     <style>
       body { max-width: 52rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
       fieldset { display: grid; gap: 0.75rem; }
@@ -14,24 +14,44 @@
     </style>
   </head>
   <body>
-    <h1>z180-wasm demo</h1>
+    <h1>Z180 firmware workbench</h1>
+    <p>The included counter writes RAM at 0x1000. Run to that write, then step back to inspect the instruction responsible. Addresses accept decimal or 0x-prefixed hexadecimal.</p>
     <fieldset>
       <legend>Run a ROM</legend>
       <label>
         ROM file
-        <input id="rom" type="file" accept=".bin,.rom,application/octet-stream" required>
+        <input id="rom" type="file" accept=".bin,.rom,application/octet-stream">
       </label>
       <label>
         Cycle budget
         <input id="cycles" type="number" min="1" max="4294967295" step="1" value="1000000">
       </label>
-      <button id="run" type="button">Run</button>
+      <label>Breakpoint (logical PC, optional)<input id="breakpoint" placeholder="0x0006"></label>
+      <label>Stop on write (physical address)<input id="watch" value="0x1000"></label>
+      <div>
+        <button id="sample" type="button">Load sample</button>
+        <button id="load" type="button">Load ROM</button>
+        <button id="run" type="button">Run</button>
+        <button id="pause" type="button">Pause</button>
+        <button id="step" type="button">Step</button>
+        <button id="back" type="button">Back</button>
+        <button id="reset" type="button">Reset</button>
+        <button id="export" type="button">Export session</button>
+      </div>
+      <label>Import session<input id="session" type="file" accept=".json,application/json"></label>
     </fieldset>
 
     <p id="status" role="status"></p>
+    <p id="history"></p>
 
     <h2>Registers</h2>
     <pre id="registers">Load a ROM to begin.</pre>
+    <h2>Memory</h2>
+    <label>Physical address<input id="address" value="0x1000"></label>
+    <button id="inspect" type="button">Inspect</button>
+    <pre id="memory"></pre>
+    <h2>MMU mapping</h2>
+    <pre id="mapping"></pre>
 
     <h2>Serial output</h2>
     <pre id="serial"></pre>

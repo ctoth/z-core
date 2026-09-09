@@ -1,92 +1,55 @@
-import init, { Machine, Reg } from "../pkg/z180_wasm.js";
-
-const PAGE_SIZE = 4096;
-const MAX_ROM_SIZE = 1 << 20;
-const REGISTER_ROWS = [
-  ["PC", Reg.PC],
-  ["SP", Reg.SP],
-  ["AF", Reg.AF],
-  ["BC", Reg.BC],
-  ["DE", Reg.DE],
-  ["HL", Reg.HL],
-  ["IX", Reg.IX],
-  ["IY", Reg.IY],
-  ["AF'", Reg.AF2],
-  ["BC'", Reg.BC2],
-  ["DE'", Reg.DE2],
-  ["HL'", Reg.HL2],
-  ["IR", Reg.IR],
-];
-
-const romInput = document.querySelector("#rom");
-const cyclesInput = document.querySelector("#cycles");
-const runButton = document.querySelector("#run");
-const status = document.querySelector("#status");
-const registers = document.querySelector("#registers");
-const serial = document.querySelector("#serial");
-
-await init();
-status.textContent = "WebAssembly loaded. Choose a ROM file.";
-
-runButton.addEventListener("click", async () => {
-  runButton.disabled = true;
-  status.textContent = "Running…";
-
+const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+const $ = id => document.getElementById(id);
+const hex = (v, width = 4) => v.toString(16).toUpperCase().padStart(width, '0');
+let ready = false, running = false;
+function controls() {
+  for (const id of ['run', 'step', 'back', 'reset', 'sample', 'load', 'export', 'session']) $(id).disabled = !ready || running;
+  $('pause').disabled = !running;
+}
+function send(command, data = {}) { worker.postMessage({ command, ...data }); }
+function number(id, max) {
+  const v = Number($(id).value);
+  if (!Number.isSafeInteger(v) || v < 0 || v > max) throw new Error(`Invalid ${id}`);
+  return v;
+}
+for (const command of ['run', 'step']) $(command).onclick = () => {
   try {
-    const file = romInput.files?.[0];
-    if (!file) {
-      throw new Error("Choose a ROM file first.");
-    }
-
-    const cycleBudget = Number(cyclesInput.value);
-    if (!Number.isInteger(cycleBudget) || cycleBudget < 1 || cycleBudget > 0xffffffff) {
-      throw new Error("Cycle budget must be an integer from 1 through 4294967295.");
-    }
-
-    const rom = new Uint8Array(await file.arrayBuffer());
-    if (rom.length === 0 || rom.length > MAX_ROM_SIZE) {
-      throw new Error("ROM size must be from 1 byte through 1 MiB.");
-    }
-
-    const regionSize = Math.ceil(rom.length / PAGE_SIZE) * PAGE_SIZE;
-    const regionData = new Uint8Array(regionSize);
-    regionData.set(rom);
-
-    const machine = new Machine({
-      regions: [{ base: 0, size: regionSize, kind: "rom", data: regionData }],
-    });
-    const consumed = machine.run(cycleBudget);
-
-    registers.textContent = REGISTER_ROWS
-      .map(([name, reg]) => `${name.padEnd(3)} ${hex16(machine.reg(reg))}`)
-      .join("\n");
-    serial.textContent = readSerial(machine);
-    status.textContent = `Ran ${consumed.toLocaleString()} cycles from ${file.name}.`;
-    machine.free();
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : String(error);
-  } finally {
-    runButton.disabled = false;
+    const cycles = number('cycles', 0xffffffff);
+    if (!cycles) throw new Error('Cycle budget must be positive');
+    send(command, { cycles, breakpoint: $('breakpoint').value.trim() === '' ? null : number('breakpoint', 0xffff), watch: number('watch', 0xffffff) });
+    running = true; controls();
+  } catch (error) { $('status').textContent = error.message; }
+};
+for (const command of ['back', 'reset', 'sample', 'pause', 'export']) $(command).onclick = () => send(command);
+$('inspect').onclick = () => {
+  try { send('inspect', { address: number('address', 0xfffff0) }); }
+  catch (error) { $('status').textContent = error.message; }
+};
+$('load').onclick = async () => {
+  try {
+    const file = $('rom').files?.[0];
+    if (!file) throw new Error('Choose a ROM first.');
+    send('load', { rom: new Uint8Array(await file.arrayBuffer()) });
+  } catch (error) { $('status').textContent = error.message; }
+};
+$('session').onchange = async () => {
+  try { const file = $('session').files?.[0]; if (file) send('import', { recording: JSON.parse(await file.text()) }); }
+  catch (error) { $('status').textContent = error.message; }
+};
+worker.onmessage = ({ data }) => {
+  if (data.recording) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data.recording)], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'z180-session.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000); return;
   }
-});
-
-function hex16(value) {
-  return value.toString(16).toUpperCase().padStart(4, "0");
-}
-
-function readSerial(machine) {
-  const decoder = new TextDecoder();
-  const outputs = [];
-
-  for (let channel = 0; channel < 2; channel += 1) {
-    const bytes = [];
-    for (let byte = machine.asciTxPop(channel); byte !== undefined; byte = machine.asciTxPop(channel)) {
-      bytes.push(byte);
-    }
-    if (bytes.length > 0) {
-      outputs.push(`ASCI${channel}:\n${decoder.decode(Uint8Array.from(bytes))}`);
-    }
-  }
-
-  return outputs.join("\n\n") || "(no serial output)";
-}
+  ready = true; running = data.running ?? false; controls();
+  $('status').textContent = data.error ?? data.status;
+  if (!data.registers) return;
+  $('registers').textContent = Object.entries(data.registers).map(([n, v]) => `${n.padEnd(3)} ${hex(v)}`).join('\n');
+  $('memory').textContent = `${hex(data.address, 6)}: ${data.memory.map(v => hex(v, 2)).join(' ')}`;
+  $('mapping').textContent = data.mapping.map(([l, p]) => `${hex(l)} → ${hex(p, 6)}`).join('\n');
+  $('serial').textContent = data.serial || '(no serial output)';
+  $('history').textContent = `Attempt ${data.attempt}; retained from ${data.oldest}; checkpoint bytes ${data.bytes.toLocaleString()}`;
+};
+worker.onerror = event => { ready = false; running = false; controls(); $('status').textContent = event.message; };
+controls();

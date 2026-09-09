@@ -26,9 +26,21 @@ the live device would mutate it twice.
 - `find_first_write()` is a temporary probe. It restores the caller's exact
   state, journal position, and mode before returning. It fails rather than
   returning an incomplete answer if the event ring loses data.
-- Journals are currently in-memory and grow with bus traffic and host actions.
-  Checkpoints are bounded by `Options::max_checkpoints`; the initial
-  checkpoint is retained so all recorded history remains seekable.
+- Journals grow with bus traffic and host actions. `retained_bytes()` reports
+  retained collection allocations, excluding the live core/host and temporary
+  export buffers. `set_byte_limit(Some(bytes))` stops before the next operation
+  after the threshold is reached; one operation can exceed it. The default
+  `None` explicitly retains unlimited history for existing callers.
+- Checkpoints are bounded by `Options::max_checkpoints`. Eviction spreads the
+  retained checkpoints across history while preserving the initial checkpoint.
+  All positions remain seekable; bounded checkpoints do not guarantee constant
+  seek latency for arbitrarily long recordings.
+- `export_recording()` produces versioned JSON containing ordered bus records,
+  host actions, attempts, and indexed checkpoints. `import_recording(bytes,
+  bus)` verifies transitions and checkpoint contents before returning a fresh
+  playback-only timeline. It never invokes the supplied live bus. Custom
+  external mapper wiring is not portable in this format. Bound input size in
+  the host when importing untrusted files; validation replays the full history.
 
 ## Example
 

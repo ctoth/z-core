@@ -54,6 +54,7 @@ pub trait HostBus {
     fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error>;
 }
 
+#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IrqLine {
     Int0,

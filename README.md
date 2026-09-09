@@ -12,6 +12,18 @@ I/O, which keeps the normal fetch and operand path fast.
 
 ## Start here
 
+Explore the included counter in the interactive debugger:
+
+```powershell
+cargo run --release -p z180-cli -- debug
+```
+
+Enter `run`, `back`, `regs`, and `find-write 0x1000` to stop on a RAM write
+and inspect the instruction responsible. `export session.json` saves a
+reproducible recording; reopen it with `debug --replay session.json`.
+The [browser workbench](crates/z180-wasm/README.md) provides the same sample,
+pause/step/back controls, memory and MMU inspection, and downloadable sessions.
+
 Run the workspace tests:
 
 ```powershell
@@ -47,6 +59,8 @@ corresponding crate:
 - [`z180-wasm`](crates/z180-wasm/README.md): Node.js, browser, and TypeScript
 
 The [architecture](docs/ARCHITECTURE.md) describes the as-built data flow.
+The [verification scope](docs/conformance.md) lists CI coverage, exclusions,
+and reproducible performance measurements.
 The [qns migration guide](docs/qns-migration.md) gives the exact move from the
 callback compatibility path to core-owned RAM. Clean-room implementation facts
 and their UM0050 citations are recorded in

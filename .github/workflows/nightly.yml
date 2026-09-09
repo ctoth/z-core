@@ -13,6 +13,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  conformance:
+    name: Full corpora and documented Z180 exerciser
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+      - name: Build conformance runner
+        run: cargo build -p z180-cli --release
+      - name: Record scope and revision
+        run: |
+          mkdir -p reports
+          git rev-parse HEAD > reports/commit.txt
+          git submodule status > reports/corpus-revisions.txt
+          cp docs/conformance.md reports/scope.md
+      - name: Shared Z80 SST corpus
+        run: target/release/z180-cli sst --dir tests/sst/v1 --report json > reports/z80-sst.json
+      - name: Z180 SST corpus
+        if: always()
+        run: target/release/z180-cli sst --dir tests/z180-sst --report json > reports/z180-sst.json
+      - name: Z180 documented exerciser
+        if: always()
+        run: target/release/z180-cli zex tests/vendor/zex/zexdoc-z180.com > reports/zexdoc-z180.txt
+      - name: Representative performance report
+        if: always()
+        run: target/release/z180-cli bench > reports/bench.json
+      - name: Preserve results and exclusions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ github.sha }}
+          path: reports/
   differential:
     name: 50,000 examples per property
     runs-on: ubuntu-latest

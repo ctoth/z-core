@@ -18,8 +18,8 @@ node tests/node-smoke.cjs
 ```
 
 The smoke constructs a core-owned ROM and RAM map, runs one million cycles,
-checks the Fibonacci result in registers, and requires at least 25 million
-emulated cycles per second.
+checks the Fibonacci result in registers, and reports seven warmed samples of
+emulated cycles per second. Performance is informational, separate from correctness.
 
 A minimal Node consumer has the same shape:
 
@@ -49,16 +49,28 @@ The browser build and demo are static files; no framework or bundler is
 required. From `crates/z180-wasm`:
 
 ```powershell
-wasm-pack build --target web --scope zcore
+wasm-pack build --target web --out-dir pkg-web --scope zcore
 uv run python -m http.server 8000
 ```
 
-Open `http://127.0.0.1:8000/demo/`, choose a ROM, set a cycle budget, and run
-it. The page prints the public registers and drains both ASCI transmit queues
-as text.
+Open `http://127.0.0.1:8000/demo/`. The bundled counter is ready immediately:
+Run stops on its write to RAM at 0x1000; Back returns to the instruction that
+made it. The worker keeps execution responsive, with Pause, Step, Reset,
+logical PC breakpoints, physical write watches, memory inspection, MMU views,
+and serial output. Load ROM maps a zero-based ROM followed by writable RAM.
+This bare board has no external devices; firmware requiring board devices
+needs a host integration.
 
-`wasm-pack` writes each target to `pkg/`, so rebuilding the Node.js target
-replaces the browser target and vice versa.
+Export/import preserves the current state and indexed history in a versioned
+browser-session JSON format. This core-only format is distinct from native
+`z180-replay` archives. Checkpoints every 256 attempted steps retain a rolling
+16 MiB of state payloads; Back is available from the oldest retained position.
+The display reports that boundary. Reset after import starts from the imported
+current state. Serial display is capped at its latest 8192 characters.
+
+Browser and Node packages use separate `pkg-web/` and `pkg/` directories.
+Validate the actual browser workflow with `npm ci`, `npx playwright install
+chromium`, and `npm run test:browser` after building both packages.
 
 ## TypeScript contract
 
