@@ -5,7 +5,6 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 mod bus;
 mod recording;
 mod timeline;
-use timeline::{map_bus_error, map_control_error};
 
 use z180_core::{
     ConfigError, Event, HostBus, IrqLine, MachineConfig, StateError, TraceEntry, WatchKind, Z180,
