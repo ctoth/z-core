@@ -37,6 +37,11 @@ try {
   const file = await download.path();
   const recording = JSON.parse(await readFile(file, 'utf8'));
   assert.equal(recording.attempt, 4);
+  const forged = structuredClone(recording);
+  forged.attempt = 5;
+  await page.locator('#session').setInputFiles({ name: 'forged.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(forged)) });
+  await page.waitForFunction(() => document.querySelector('#status').textContent.includes('disagrees'));
+  assert.match(await page.locator('#history').textContent(), /^Attempt 4;/);
   await page.getByRole('button', { name: 'Reset', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#history').textContent.startsWith('Attempt 0;'));
   await page.locator('#session').setInputFiles({ name: 'recording.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(recording)) });

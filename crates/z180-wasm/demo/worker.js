@@ -34,14 +34,19 @@ function load(rom) {
   } catch (error) { next.free(); throw error; }
   restartHistory();
 }
-function one() {
-  const cycles = machine.step(); attempt++;
-  const events = machine.drainEvents();
-  if (machine.eventsLost()) throw new Error('Event overflow; write-watch result is incomplete.');
+function advance(cpu, text) {
+  const cycles = cpu.step();
+  const events = cpu.drainEvents();
+  if (cpu.eventsLost()) throw new Error('Event overflow; write-watch result is incomplete.');
   for (let channel = 0; channel < 2; channel++) {
-    for (let byte = machine.asciTxPop(channel); byte !== undefined; byte = machine.asciTxPop(channel)) serial = (serial + String.fromCharCode(byte)).slice(-8192);
+    for (let byte = cpu.asciTxPop(channel); byte !== undefined; byte = cpu.asciTxPop(channel)) text = (text + String.fromCharCode(byte)).slice(-8192);
   }
-  remember(); return { cycles, events };
+  return { cycles, events, serial: text };
+}
+function one() {
+  const result = advance(machine, serial);
+  serial = result.serial; attempt++;
+  remember(); return result;
 }
 function back() {
   const target = attempt - 1;
@@ -83,7 +88,7 @@ function importSession(record) {
   const candidate = new Machine();
   try {
     const loaded = record.checkpoints.map(cp => {
-      if (!Number.isSafeInteger(cp.attempt) || cp.attempt <= previous || cp.attempt > record.attempt || typeof cp.serial !== 'string' || cp.serial.length > 8192) throw new Error('Invalid checkpoint index.');
+      if (!Number.isSafeInteger(cp.attempt) || cp.attempt < 0 || cp.attempt <= previous || cp.attempt > record.attempt || (previous >= 0 && cp.attempt - previous > INTERVAL) || typeof cp.serial !== 'string' || cp.serial.length > 8192) throw new Error('Invalid checkpoint index.');
       previous = cp.attempt; const state = decode(cp.state); total += state.length;
       if (total > MAX_BYTES) throw new Error('Session exceeds history budget.');
       candidate.loadState(state);
@@ -91,6 +96,14 @@ function importSession(record) {
     });
     const state = decode(record.state); candidate.loadState(state);
     if (typeof record.serial !== 'string' || record.serial.length > 8192) throw new Error('Invalid serial output.');
+    if (record.attempt - loaded.at(-1).attempt >= INTERVAL) throw new Error('Invalid final checkpoint distance.');
+    candidate.loadState(loaded[0].state);
+    let cursor = loaded[0].attempt, text = loaded[0].serial;
+    for (const target of [...loaded.slice(1), { attempt: record.attempt, state, serial: record.serial }]) {
+      while (cursor < target.attempt) { text = advance(candidate, text).serial; cursor++; }
+      const actual = candidate.saveState();
+      if (text !== target.serial || actual.length !== target.state.length || actual.some((value, index) => value !== target.state[index])) throw new Error('Session state disagrees with recorded history.');
+    }
     machine.loadState(state); initial = state; attempt = record.attempt; serial = record.serial;
     checkpoints = loaded; bytes = total;
   } finally { candidate.free(); }

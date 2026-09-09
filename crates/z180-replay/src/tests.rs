@@ -90,6 +90,60 @@ fn options(interval: u64) -> Options {
 }
 
 #[test]
+fn imported_recording_reproduces_host_failure_without_live_callbacks() {
+    let observations = Rc::new(RefCell::new(BusObservations::default()));
+    let bus = ScriptedBus {
+        observations: Rc::clone(&observations),
+        read_value: 0x5a,
+        fail_memory_write: Some(0x2000),
+    };
+    let mut config = ram_config(0x1000);
+    config.regions.push(RegionDef {
+        base: 0x2000,
+        size: 0x1000,
+        kind: RegionKind::External,
+    });
+    let mut timeline = Timeline::new(config, bus, options(1)).unwrap();
+    for (address, byte) in [0xdb, 0x80, 0x32, 0x00, 0x20].into_iter().enumerate() {
+        timeline.setup().unwrap().mem_poke(address as u32, byte);
+    }
+    timeline.start().unwrap();
+    timeline.try_step().unwrap();
+    assert!(matches!(
+        timeline.try_step(),
+        Err(TimelineError::LiveHost("memory write failed"))
+    ));
+    timeline.drain(Output::Events).unwrap();
+    let state = timeline.machine().save_state();
+    let data = timeline.export_recording().unwrap();
+    let calls = (
+        observations.borrow().reads.len(),
+        observations.borrow().memory_writes.len(),
+    );
+    let replacement_bus = ScriptedBus {
+        observations: Rc::clone(&observations),
+        read_value: 0xbb,
+        fail_memory_write: None,
+    };
+    let mut imported = Timeline::import_recording(&data, replacement_bus).unwrap();
+    assert_eq!(imported.machine().save_state(), state);
+    imported
+        .seek(imported.position_at_attempt(1).unwrap())
+        .unwrap();
+    assert!(matches!(
+        imported.try_step(),
+        Err(TimelineError::RecordedHostFailure { .. })
+    ));
+    assert_eq!(
+        (
+            observations.borrow().reads.len(),
+            observations.borrow().memory_writes.len()
+        ),
+        calls
+    );
+}
+
+#[test]
 fn recording_round_trip_rewinds_and_rejects_forged_checkpoint() {
     let mut timeline = Timeline::new(ram_config(0x1000), NullBus, options(2)).unwrap();
     timeline.setup().unwrap().mem_poke(0, 0x3c);

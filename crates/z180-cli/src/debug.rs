@@ -167,7 +167,11 @@ fn command(
                     break;
                 }
                 let before = t.position();
-                if t.mode() == Mode::Playback && Some(before) == t.recorded_end() {
+                if t.mode() == Mode::Playback
+                    && let Some(end) = t.recorded_end()
+                    && before.attempted_steps == end.attempted_steps
+                {
+                    t.seek(end)?;
                     writeln!(out, "end of recording")?;
                     break;
                 }
@@ -329,6 +333,22 @@ fn show(t: &Timeline<Board>, out: &mut impl Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn playback_consumes_terminal_drains_and_stops_cleanly() {
+        let mut timeline = make_timeline(SAMPLE).unwrap();
+        let mut output = Vec::new();
+        session(
+            &mut timeline,
+            &b"run\nback\nwatch off\nrun\n"[..],
+            &mut output,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(!text.contains("error:"), "{text}");
+        assert!(text.contains("end of recording"), "{text}");
+        assert_eq!(Some(timeline.position()), timeline.recorded_end());
+    }
+
     #[test]
     fn sample_watch_back_and_find_write_workflow() {
         let mut timeline = make_timeline(SAMPLE).unwrap();
