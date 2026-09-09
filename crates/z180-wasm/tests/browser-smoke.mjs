@@ -4,10 +4,15 @@ import { readFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { chromium } from 'playwright';
 
-const root = resolve(import.meta.dirname, '..');
+const root = process.env.PAGES_ROOT ? resolve(process.env.PAGES_ROOT) : resolve(import.meta.dirname, '..');
+const prefix = process.env.PAGES_ROOT ? '/z-core' : '';
 const server = createServer(async (req, res) => {
   try {
-    const path = resolve(root, `.${new URL(req.url, 'http://localhost').pathname}`);
+    let pathname = new URL(req.url, 'http://localhost').pathname;
+    if (!pathname.startsWith(`${prefix}/`)) { res.writeHead(404).end(); return; }
+    pathname = pathname.slice(prefix.length);
+    if (pathname.endsWith('/')) pathname += 'index.html';
+    const path = resolve(root, `.${pathname}`);
     if (!path.startsWith(root + sep)) { res.writeHead(403).end(); return; }
     res.setHeader('Content-Type', ({ '.js': 'text/javascript', '.wasm': 'application/wasm', '.html': 'text/html' })[extname(path)] ?? 'application/octet-stream');
     res.end(await readFile(path));
@@ -20,7 +25,13 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${server.address().port}/demo/index.html`);
+  const base = process.env.PAGES_URL ?? `http://127.0.0.1:${server.address().port}${prefix}/`;
+  if (process.env.PAGES_ROOT || process.env.PAGES_URL) {
+    await page.goto(base);
+    await page.getByRole('link', { name: 'Open the firmware workbench' }).click();
+  } else {
+    await page.goto(`${base}demo/index.html`);
+  }
   await page.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Sample loaded'));
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Write at PC'));

@@ -45,6 +45,9 @@ try {
 
 ## Browser demo
 
+**[Try the hosted workbench](https://ctoth.github.io/z-core/demo/)**, or build
+and serve it locally:
+
 The browser build and demo are static files; no framework or bundler is
 required. From `crates/z180-wasm`:
 

@@ -12,6 +12,10 @@ I/O, which keeps the normal fetch and operand path fast.
 
 ## Start here
 
+**[Open the browser workbench](https://ctoth.github.io/z-core/)** to run the
+included sample, inspect memory, and step backward without installing anything.
+Site build and deployment instructions are in [GitHub Pages](docs/pages.md).
+
 Explore the included counter in the interactive debugger:
 
 ```powershell

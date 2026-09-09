@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="A deterministic Z180 emulator for Rust, Python, and WebAssembly. Explore firmware in the browser workbench.">
+    <title>z-core — Z180 emulator and firmware workbench</title>
+    <style>
+      :root { color-scheme: light dark; font: 1.125rem/1.65 system-ui, sans-serif; }
+      body { max-width: 46rem; margin: 4rem auto; padding: 0 1.25rem; }
+      h1 { font-size: 3rem; margin-bottom: 0; }
+      h2 { margin-top: 2rem; }
+      a { color: light-dark(#0645ad, #9fc5ff); text-underline-offset: 0.2em; }
+      a:focus-visible { outline: 3px solid currentColor; outline-offset: 4px; }
+      .launch { display: inline-block; padding: 0.6rem 1rem; border: 2px solid; border-radius: 0.3rem; font-weight: 600; }
+      footer { margin-top: 3rem; border-top: 1px solid; padding-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>z-core</h1>
+      <p>A deterministic Z80180/Z8S180 CPU and SoC emulator, written in Rust for native, Python, and WebAssembly hosts.</p>
+      <p><a class="launch" href="demo/">Open the firmware workbench</a></p>
+      <h2>Try it in your browser</h2>
+      <p>The included counter is ready to run. Select <strong>Run</strong> to stop on a write to RAM at <code>0x1000</code>, then <strong>Back</strong> to inspect the instruction responsible. Step through instructions, inspect registers and memory, and export a session to revisit later.</p>
+      <p>You can also load your own ROM. Execution and session files stay in your browser. The workbench models a bare board; firmware that needs external devices requires a host integration.</p>
+      <h2>Build with z-core</h2>
+      <p>The core includes the CPU, MMU, interrupts, timers, serial interfaces, DMA, tracing, and save states. It uses <code>no_std</code> with <code>alloc</code> and forbids unsafe code.</p>
+      <ul>
+        <li><a href="https://github.com/ctoth/z-core#readme">Getting started and source code</a></li>
+        <li><a href="https://github.com/ctoth/z-core/blob/master/crates/z180-core/README.md">Rust API</a></li>
+        <li><a href="https://github.com/ctoth/z-core/blob/master/crates/z180-py/README.md">Python binding</a></li>
+        <li><a href="https://github.com/ctoth/z-core/blob/master/crates/z180-wasm/README.md">WebAssembly and TypeScript</a></li>
+        <li><a href="https://github.com/ctoth/z-core/blob/master/docs/ARCHITECTURE.md">Architecture</a> and <a href="https://github.com/ctoth/z-core/blob/master/docs/conformance.md">verification scope</a></li>
+      </ul>
+    </main>
+    <footer>Available under <a href="https://github.com/ctoth/z-core/blob/master/LICENSE-MIT">MIT</a> or <a href="https://github.com/ctoth/z-core/blob/master/LICENSE-APACHE">Apache-2.0</a>.</footer>
+  </body>
+</html>
