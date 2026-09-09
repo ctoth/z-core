@@ -499,7 +499,7 @@ Split the SST runner by pipeline stage
 
 ### 10. Split the Python binding implementation
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
