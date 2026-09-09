@@ -433,7 +433,7 @@ Extract z180-core peripheral implementations
 
 ### 8. Split replay-bus and timeline implementations
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
