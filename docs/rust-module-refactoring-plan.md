@@ -303,7 +303,7 @@ Extract z180-core debugging implementation
 
 ### 4. Extract interrupt-controller implementation
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
