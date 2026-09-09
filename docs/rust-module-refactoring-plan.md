@@ -396,7 +396,7 @@ Extract z180-core access implementation
 
 ### 7. Extract peripheral-family implementations
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
