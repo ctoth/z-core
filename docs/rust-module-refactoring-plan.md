@@ -463,7 +463,7 @@ Split replay bus and timeline implementations
 
 ### 9. Split the SST runner by pipeline stage
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
