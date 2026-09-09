@@ -245,7 +245,7 @@ Refactor z180-core tests into owner modules
 
 ### 2. Extract save-state implementation
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
