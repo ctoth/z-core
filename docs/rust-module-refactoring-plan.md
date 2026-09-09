@@ -6,7 +6,7 @@ This is an execution plan for a post-v0.1 structural refactor of the Rust
 workspace. It does not reopen or replace the completed build plan in
 `PLAN.md`, and it does not add work to `PROGRESS.md`.
 
-Do not execute this plan until Q explicitly authorizes execution. Once
+Q authorized execution on 2026-09-08. Once
 execution starts, this document is the controlling workflow for the refactor.
 Execute its slices in order. Do not begin a later slice until the current slice
 has either been committed as a kept change or fully reverted.
@@ -76,7 +76,7 @@ uncommitted:
 - `notes-rust-refactoring-tooling.md`
 - `notes-transcript-admission-search.md`
 
-Only `notes-rust-module-refactoring-execution.md` may be updated for required
+Only `notes-workbench.md` may be updated for required
 execution checkpoints. The other nine notes are user-owned or prior task
 records and must remain unmodified.
 
@@ -90,198 +90,26 @@ moves.
 
 ## Rust refactoring tooling
 
-Rust source must be changed through Rust-aware refactoring operations, not
-through Codex file editing, `apply_patch`, shell-generated source, text
-replacement, or a custom move script. Raw diff inspection and compiler/test
-commands validate a refactoring; they are not permitted source-mutation
-mechanisms.
+On 2026-09-08 Q authorized the six workbench improvements and explicitly
+approved ordinary reviewed patches for module moves in place of the earlier
+rust-analyzer-only editor workflow. This supersedes the editor/client-only
+source-mutation requirements and associated tool-version stop conditions.
+Moves may be prepared from Rust syntax-tree item boundaries and applied as
+reviewed patches. Preserve complete item bodies and attribute attachment;
+compiler-required visibility/import changes are the only semantic edits.
+Do not add refactoring tooling to the shipped source tree.
 
-The installed and end-to-end verified refactoring stack is:
+Use the existing ordered slices and their compiler/test gates. The feature
+work was completed before these structural slices in commit `d628e80`.
+The refreshed production baseline includes `recording.rs`, `debug.rs`, and
+`bench.rs`; those new responsibilities already have separate owners. Replay
+recording/import stays in `recording.rs` during slice 8. The default core test
+inventory remains 89 tests; state-feature workspace tests include 96 core tests.
 
-- the rustup `rust-analyzer` and `rust-src` components for the workspace's
-  pinned `1.93.1` toolchain;
-- `rust-analyzer 1.93.1 (01f6ddf7 2026-02-11)`, used by Helix through the
-  rustup proxy;
-- Helix `25.07.1`, the terminal LSP client used to apply rust-analyzer code
-  actions;
-- the official VS Code extension `rust-lang.rust-analyzer@0.3.2989`, including
-  bundled server
-  `rust-analyzer 0.3.2989-standalone (12c3381f0b 2026-07-26)`. Its package
-  registers `rust-analyzer.moveItemUp`, `rust-analyzer.moveItemDown`, and the
-  `experimental/moveItem` server request. VS Code is driven through its
-  Chromium DevTools Protocol endpoint so the LLM can apply and save these
-  Rust-aware operations without human input.
-
-Install or repair that exact local stack with:
-
-```powershell
-rustup component add rust-analyzer rust-src --toolchain 1.93.1
-scoop install helix@25.07.1
-code --install-extension rust-lang.rust-analyzer@0.3.2989 --force
-```
-
-Before opening a refactoring client, pin the server selected by the rustup
-proxy and verify the installed integration:
-
-```powershell
-$env:RUSTUP_TOOLCHAIN = '1.93.1'
-rust-analyzer --version
-hx --version
-hx --health rust
-code --list-extensions --show-versions | Select-String -Pattern '^rust-lang\.rust-analyzer@'
-& "$env:USERPROFILE\.vscode\extensions\rust-lang.rust-analyzer-0.3.2989-win32-x64\server\rust-analyzer.exe" --version
-```
-
-The required results are the rust-analyzer and Helix versions above, a Helix
-Rust health report that finds `rust-analyzer` and marks the Rust parser and
-queries healthy, the VS Code extension version above, and the exact bundled
-server version above. If any result differs, stop before source work and
-refresh this tooling record; do not silently use a different refactoring
-engine.
-
-The pinned rust-analyzer binary and installed client package were verified to
-contain these required operations:
-
-- `extract_module`, shown by clients as `Extract Module`;
-- `move_module_to_file`, shown by Helix as `Extract module to file`;
-- `move_to_mod_rs`, shown by VS Code as
-  `Convert <name>.rs to <name>/mod.rs`;
-- `move_item`, registered by VS Code as `rust-analyzer: Move item up` and
-  `rust-analyzer: Move item down`;
-- LSP Rename and semantic import, qualification, unused-import, and visibility
-  code actions.
-
-The LLM control path for VS Code is:
-
-1. Launch a dedicated instance, never an existing user window:
-
-   ```powershell
-   $env:RUSTUP_TOOLCHAIN = '1.93.1'
-   code --user-data-dir 'C:\Users\Q\AppData\Local\Temp\z-core-ra-vscode-cdp-profile' `
-     --extensions-dir 'C:\Users\Q\.vscode\extensions' `
-     --disable-workspace-trust `
-     --remote-debugging-port=9333 `
-     '--remote-allow-origins=*' `
-     --new-window '<workspace-root>' `
-     --goto '<absolute-rust-path>:<line>:<column>'
-   ```
-
-   Resolve all four angle-bracket fields to the active slice before running
-   the command. The path and caret must identify the complete Rust item being
-   moved.
-2. Open `http://127.0.0.1:9333/json/list` through the browser DevTools
-   connector, select the dedicated VS Code page by its exact title, and
-   connect to that page's `webSocketDebuggerUrl`.
-3. Send these CDP messages directly from the connector; do not write an
-   automation script:
-   - `Input.dispatchKeyEvent` key-down and key-up for `P` / `KeyP`, virtual
-     key `80`, modifiers `10` (`Ctrl+Shift`) to open the command palette;
-   - `Input.insertText` with exactly `rust-analyzer: Move Item Down` or
-     `rust-analyzer: Move Item Up`;
-   - `Input.dispatchKeyEvent` key-down and key-up for `Enter`, virtual key
-     `13`, to invoke rust-analyzer;
-   - after the workspace edit settles, `Input.dispatchKeyEvent` key-down and
-     key-up for `s` / `KeyS`, virtual key `83`, modifiers `2` (`Ctrl`) to save.
-4. For rust-analyzer assists exposed through VS Code's Action Widget:
-   - use `Input.dispatchKeyEvent` for `Ctrl+A` only when the assist requires
-     selection of the complete file;
-   - open the Action Widget with `Ctrl+.` using `.` / `Period`, virtual key
-     `190`, modifiers `2`;
-   - inspect the widget text and focused action through read-only CDP
-     `Runtime.evaluate`;
-   - use trusted `ArrowDown` events until the exact rust-analyzer action is
-     focused, then send `Enter`;
-   - save with the `Ctrl+S` sequence above.
-   `move_to_mod_rs` must use this VS Code path because Helix exposes the assist
-   but does not apply its workspace file move.
-5. Read the saved file and raw Git diff only as evidence. The expected change
-   is movement of the selected complete Rust item; any textual rewrite or
-   unrelated edit rejects the operation.
-6. Run the active compiler/test gate immediately.
-7. At the end of the active slice, save and verify every expected Rust-aware
-   edit, then send CDP `Browser.close` to the dedicated instance and verify
-   that port `9333` is no longer listening. Do not leave a refactoring debug
-   endpoint running between slices.
-
-CDP supplies trusted editor input only. VS Code sends the semantic request,
-rust-analyzer creates the workspace edit, and VS Code applies and saves it.
-The connector must never call a DOM text-edit API, Monaco edit API, filesystem
-write API, or generic source-edit tool.
-
-Use the following source-mutation protocol inside the active slice:
-
-1. Open only the active slice's Rust paths in a verified client.
-2. Select complete Rust items. If required items are noncontiguous, use only
-   rust-analyzer `Move item up` or `Move item down` to make them contiguous,
-   preserving their relative order, and inspect that order-only diff before
-   continuing.
-3. Apply rust-analyzer `Extract Module` to the complete selection.
-4. Name the generated module with LSP Rename; typing the destination name is
-   input to that refactoring operation, not permission for source editing.
-5. Apply rust-analyzer `Extract module to file`.
-6. When the plan requires `<name>/mod.rs`, first let rust-analyzer extract the
-   inline parent as `<name>.rs`, then select the complete file and apply
-   rust-analyzer `Convert <name>.rs to <name>/mod.rs` through the verified
-   VS Code Action Widget path.
-7. Run the slice's first compiler gate immediately. If the generated move
-   needs an import, path qualification, unused-import removal, or visibility
-   repair, apply only the matching rust-analyzer semantic code action. Never
-   select a code-generation action as a substitute for an existing moved
-   item.
-8. Run `cargo fmt --all`, inspect the complete raw diff, and continue with the
-   slice's remaining gates.
-
-An isolated live smoke test on 2026-07-30 exercised the complete required
-stack in `C:\Users\Q\AppData\Local\Temp\z-core-ra-refactor-smoke`:
-
-- Cargo generated the temporary library; rust-analyzer `Extract Module`, LSP
-  Rename, and `Extract module to file` created the destination module.
-- The first `cargo test` exposed a nested `use super::*` whose meaning changed
-  after extraction. rust-analyzer `Import crate::add` and
-  `Remove all unused imports` repaired the imports without text editing, and
-  the next `cargo test` passed.
-- The LLM used the CDP protocol above to invoke
-  `rust-analyzer: Move Item Down`. The saved source contained the complete
-  `add` item below `mod smokemodname;`, its SHA-256 became
-  `85509627757F7669711F322731B16DB6892CC35A56861843D1870CCAEF8C66E4`, and
-  `cargo test` passed.
-- The LLM then invoked `rust-analyzer: Move Item Up`. The file returned
-  byte-for-byte to starting SHA-256
-  `3447ACCF369783A043C54F49CB0E7C4D237A6913B392BFDE2472E43B53837ECA`, and
-  `cargo test` passed again.
-- In a fresh Cargo-generated crate at
-  `C:\Users\Q\AppData\Local\Temp\z-core-ra-modrs-smoke`, rust-analyzer first
-  extracted the inline `tests` module to `tests.rs`. The LLM then used the
-  VS Code Action Widget path to invoke
-  `Convert tests.rs to tests/mod.rs`. The resulting source contained
-  `#[cfg(test)] mod tests;` and `src/tests/mod.rs`, and `cargo test` passed.
-
-No human input, generic Rust-source write, custom move script, or text
-replacement was used. The smoke test also proves that rust-analyzer output
-must not be trusted without the immediate compiler gate and Rust-aware repair
-loop.
-
-No installed standalone CLI safely performs this workflow. The rust-analyzer
-assists are LSP/editor operations, not a stable batch command.
-
-- The first `python.exe` on this Windows host is 32-bit. Before any workspace
-  Cargo command, PyO3 must be pinned to the verified uv-managed 64-bit
-  CPython 3.13.5 interpreter shown in the execution protocol below.
-- The checked-in Python lock metadata currently retains the older
-  `pytest>=8,<10` requirement while `pyproject.toml` names
-  `pytest>=9.0.3,<10`. A plain `uv run` normalizes that unrelated metadata and
-  dirties `uv.lock`. Python gates in this plan therefore use `uv run --frozen`
-  so the structural campaign cannot absorb the pre-existing lock drift.
-- `ast-grep 0.41.0` is installed but is not an allowed source-mutation
-  mechanism in this campaign. It must not infer ownership, move source,
-  rewrite imports, or change visibility.
-- `cargo fmt`, `cargo clippy`, and the compiler/test suite are the semantic
-  validation authorities.
-
-Do not add a custom refactoring script, helper crate, code generator, adapter,
-facade, or compatibility layer for this campaign. If the installed
-Rust-aware operations cannot produce a planned move, stop and report the
-active slice instead of editing the Rust source by another mechanism.
+Pin PYO3_PYTHON to the existing uv-managed 64-bit CPython 3.13.5 interpreter.
+Use `uv run --frozen` for Python binding gates to preserve unrelated lock
+metadata. Source changes remain separate, behavior-preserving commits in the
+order below. The existing opcode and I/O tables remain intact.
 
 ## Non-negotiable boundaries
 
@@ -798,7 +626,7 @@ git diff --check
 git log --oneline --decorate -15
 ```
 
-The final status may contain only the ten untracked notes listed in Current
+The final status may contain only notes-workbench.md and the ten untracked notes listed in Current
 evidence. All twelve plan checkboxes must be checked, every source slice must
 have its own named commit, and no old production implementation may coexist
 with its new owner module.
