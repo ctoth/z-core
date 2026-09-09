@@ -365,7 +365,7 @@ Extract z180-core instruction implementations
 
 ### 6. Extract memory, bus, and internal-I/O access
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
