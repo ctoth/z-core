@@ -1,0 +1,63 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: crates/z180-wasm/package-lock.json
+      - uses: taiki-e/install-action@v2.85.1
+        with:
+          tool: wasm-pack@0.15.0
+      - name: Build browser WebAssembly
+        working-directory: crates/z180-wasm
+        run: wasm-pack build --target web --out-dir pkg-web --scope zcore --locked
+      - name: Assemble static site
+        run: node tools/build-pages.mjs
+      - name: Install browser test tools
+        working-directory: crates/z180-wasm
+        run: npm ci
+      - name: Install Chromium
+        working-directory: crates/z180-wasm
+        run: npx playwright install --with-deps chromium
+      - name: Test packaged site at a project subpath
+        working-directory: crates/z180-wasm
+        env:
+          PAGES_ROOT: ../../target/pages
+        run: npm run test:browser
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/pages
+
+  deploy:
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy site
+        id: deployment
+        uses: actions/deploy-pages@v4
