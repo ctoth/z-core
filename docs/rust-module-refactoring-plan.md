@@ -537,7 +537,7 @@ Split the Python binding implementation
 
 ### 11. Split the WebAssembly binding implementation
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
