@@ -332,7 +332,7 @@ Extract z180-core interrupt implementation
 
 ### 5. Extract instruction execution by opcode family
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
