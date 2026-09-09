@@ -12,6 +12,8 @@ extern crate alloc;
 use alloc::{collections::VecDeque, vec::Vec};
 use core::convert::Infallible;
 
+mod debug;
+use debug::{MemWatch, TraceCapture};
 mod disassembler;
 mod ioregs;
 mod memory;
@@ -95,15 +97,6 @@ pub enum WatchKind {
 }
 
 #[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
-#[derive(Clone, Copy)]
-struct MemWatch {
-    id: WatchId,
-    base: u32,
-    size: u32,
-    kind: WatchKind,
-}
-
-#[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     IoRead {
@@ -157,11 +150,6 @@ pub struct TraceEntry {
     pub phys_pc: u32,
     pub bytes: [u8; 4],
     pub len: u8,
-}
-
-struct TraceCapture {
-    entry: TraceEntry,
-    captured: u8,
 }
 
 const EXT_MAP_TABLE_LEN: usize = 1 << 20;
@@ -726,179 +714,6 @@ impl<B: HostBus> Z180<B> {
     pub fn mmu_translate(&self, logical: u16) -> u32 {
         let page = usize::from(logical >> 12);
         self.mmu_pages[page] + u32::from(logical & 0x0fff)
-    }
-
-    pub fn add_mem_watch(&mut self, base: u32, size: u32, kind: WatchKind) -> WatchId {
-        let id = WatchId(self.next_watch_id);
-        self.next_watch_id = self.next_watch_id.wrapping_add(1);
-        if self.next_watch_id == 0 {
-            self.next_watch_id = 1;
-        }
-        self.mem_watches.push(MemWatch {
-            id,
-            base,
-            size,
-            kind,
-        });
-        let _ = self.ensure_event_storage();
-        id
-    }
-
-    pub fn remove_mem_watch(&mut self, id: WatchId) {
-        self.mem_watches.retain(|watch| watch.id != id);
-    }
-
-    pub fn set_io_trace(&mut self, enabled: bool) {
-        self.io_trace = enabled;
-        if enabled {
-            let _ = self.ensure_event_storage();
-        }
-    }
-
-    pub fn set_irq_trace(&mut self, enabled: bool) {
-        self.irq_trace = enabled;
-        if enabled {
-            let _ = self.ensure_event_storage();
-        }
-    }
-
-    pub fn set_pc_watch(&mut self, addr: Option<u16>) {
-        self.pc_watch = addr;
-        self.pc_watch_hits = 0;
-    }
-
-    pub fn pc_watch_hits(&self) -> u64 {
-        self.pc_watch_hits
-    }
-
-    pub fn drain_events(&mut self) -> Vec<Event> {
-        let mut drained = Vec::with_capacity(self.events.len());
-        drained.extend(self.events.drain(..));
-        drained
-    }
-
-    pub fn events_lost(&self) -> bool {
-        self.events_lost
-    }
-
-    pub fn clear_events_lost(&mut self) {
-        self.events_lost = false;
-    }
-
-    pub fn set_insn_trace(&mut self, capacity: Option<usize>) {
-        self.insn_trace_capture = None;
-        let Some(capacity) = capacity else {
-            self.insn_trace_capacity = None;
-            self.insn_trace = VecDeque::new();
-            return;
-        };
-
-        if self.insn_trace.capacity() < capacity
-            && self
-                .insn_trace
-                .try_reserve_exact(capacity - self.insn_trace.len())
-                .is_err()
-        {
-            return;
-        }
-        while self.insn_trace.len() > capacity {
-            let _ = self.insn_trace.pop_front();
-        }
-        self.insn_trace_capacity = Some(capacity);
-    }
-
-    pub fn drain_insn_trace(&mut self) -> Vec<TraceEntry> {
-        let mut drained = Vec::with_capacity(self.insn_trace.len());
-        drained.extend(self.insn_trace.drain(..));
-        drained
-    }
-
-    fn begin_insn_trace(&mut self, pc: u16) {
-        let Some(capacity) = self.insn_trace_capacity else {
-            return;
-        };
-        if capacity == 0 {
-            return;
-        }
-        self.insn_trace_capture = Some(TraceCapture {
-            entry: TraceEntry {
-                cycle: self.cycle_count,
-                pc,
-                phys_pc: self.mmu_translate(pc),
-                bytes: [0; 4],
-                len: 0,
-            },
-            captured: 0,
-        });
-    }
-
-    fn capture_insn_byte(&mut self, logical: u16, value: u8) {
-        let Some(capture) = &mut self.insn_trace_capture else {
-            return;
-        };
-        let offset = logical.wrapping_sub(capture.entry.pc);
-        if offset >= 4 {
-            return;
-        }
-        let bit = 1_u8 << offset;
-        if capture.captured & bit == 0 {
-            capture.entry.bytes[usize::from(offset)] = value;
-            capture.captured |= bit;
-        }
-    }
-
-    fn finish_insn_trace(&mut self, len: u8) {
-        let Some(mut capture) = self.insn_trace_capture.take() else {
-            return;
-        };
-        let used = usize::from(len).min(capture.entry.bytes.len());
-        capture.entry.len = used as u8;
-        for byte in &mut capture.entry.bytes[used..] {
-            *byte = 0;
-        }
-        self.push_insn_trace(capture.entry);
-    }
-
-    fn push_insn_trace(&mut self, entry: TraceEntry) {
-        let Some(capacity) = self.insn_trace_capacity else {
-            return;
-        };
-        if capacity == 0 {
-            return;
-        }
-        if self.insn_trace.capacity() < capacity
-            && self
-                .insn_trace
-                .try_reserve_exact(capacity - self.insn_trace.len())
-                .is_err()
-        {
-            return;
-        }
-        if self.insn_trace.len() == capacity {
-            let _ = self.insn_trace.pop_front();
-        }
-        self.insn_trace.push_back(entry);
-    }
-
-    fn ensure_event_storage(&mut self) -> bool {
-        if self.event_capacity == 0 || self.events.capacity() >= self.event_capacity {
-            return self.event_capacity != 0;
-        }
-        self.events
-            .try_reserve_exact(self.event_capacity - self.events.len())
-            .is_ok()
-    }
-
-    fn push_event(&mut self, event: Event) {
-        if !self.ensure_event_storage() {
-            self.events_lost = true;
-            return;
-        }
-        if self.events.len() == self.event_capacity {
-            let _ = self.events.pop_front();
-            self.events_lost = true;
-        }
-        self.events.push_back(event);
     }
 
     pub fn iff1(&self) -> bool {

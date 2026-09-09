@@ -273,7 +273,7 @@ Extract z180-core save-state implementation
 
 ### 3. Extract debugging, watches, events, and instruction tracing
 
-- [ ] Complete
+- [x] Complete
 
 Owned paths:
 
