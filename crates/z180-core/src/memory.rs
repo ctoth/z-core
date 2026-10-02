@@ -120,7 +120,7 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
-    pub(crate) fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
+    pub(crate) fn new(config: MachineConfig) -> Result<Self, ConfigError> {
         if !(20..=24).contains(&config.phys_addr_bits) {
             return Err(ConfigError::InvalidPhysicalAddressBits(
                 config.phys_addr_bits,
@@ -137,8 +137,8 @@ impl Memory {
             physical_size,
         };
 
-        for region in &config.regions {
-            memory.map_region(region.base, region.size, region.kind.clone(), false)?;
+        for region in config.regions {
+            memory.map_region(region.base, region.size, region.kind, false)?;
         }
 
         Ok(memory)

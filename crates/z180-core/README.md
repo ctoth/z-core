@@ -73,6 +73,21 @@ z180-core = { path = "../z-core/crates/z180-core", features = ["state"] }
 The state payload restores emulated state but deliberately does not serialize
 the host bus or external address mapper.
 
+## Embedded memory use
+
+Construction transfers the ROM buffers in `MachineConfig` into the machine
+without copying their bytes. RAM is allocated and zeroed for each configured
+RAM region; ROM remains heap-owned. A 20-bit physical address space allocates
+only its page table, rather than a full 1 MiB guest image.
+
+Use `event_capacity: 0` when event capture is unnecessary. The default is 4096
+events, allocated lazily when tracing, watches, or an event producer first
+needs the ring. Instruction tracing is disabled by default.
+
+With `state` enabled, `save_state()` serializes borrowed machine data directly
+into the returned byte buffer. It does not clone guest RAM, ROM, or queues.
+Save-state version 4 and its byte encoding remain unchanged.
+
 ## Verify
 
 From the z-core repository root:

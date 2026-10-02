@@ -264,10 +264,6 @@ impl<B: HostBus> Z180<B> {
     ///
     /// Returns [`ConfigError`] when the physical address width, memory regions,
     /// or external mapping configuration is invalid.
-    #[allow(
-        clippy::needless_pass_by_value,
-        reason = "the public API deliberately transfers ownership of MachineConfig as specified by the architecture contract"
-    )]
     pub fn new(config: MachineConfig, bus: B) -> Result<Self, ConfigError> {
         let mut io_regs = [0; IO_REGISTER_COUNT];
         for (index, spec) in IO_REG_SPECS.iter().copied().enumerate() {
@@ -275,15 +271,18 @@ impl<B: HostBus> Z180<B> {
                 io_regs[index] = spec.reset;
             }
         }
+        let variant = config.variant;
+        let event_capacity = config.event_capacity;
+        let memory = Memory::new(config)?;
         let mut cpu = Self {
             registers: Registers::default(),
-            memory: Memory::new(&config)?,
+            memory,
             bus,
             bus_error: None,
             instruction_pc: 0,
             indexed_displacement: None,
             cycle_count: 0,
-            variant: config.variant,
+            variant,
             io_regs,
             mmu_pages: [0; 16],
             ext_mapper: None,
@@ -325,7 +324,7 @@ impl<B: HostBus> Z180<B> {
             csio_cycles: 0,
             csio_clocked: false,
             csio_tx_output: VecDeque::new(),
-            event_capacity: config.event_capacity,
+            event_capacity,
             events: VecDeque::new(),
             events_lost: false,
             mem_watches: Vec::new(),

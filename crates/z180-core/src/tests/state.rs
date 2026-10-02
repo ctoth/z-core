@@ -26,7 +26,7 @@ fn save_state_version_and_decode_errors_are_atomic() {
 
     let mut decoded: SavedState = postcard::from_bytes(&original[1..])
         .expect("freshly saved payload must decode in its own test");
-    decoded.io_regs.pop();
+    decoded.io_regs.to_mut().pop();
     let payload = postcard::to_allocvec(&decoded)
         .expect("the deliberately short register file must serialize");
     let mut wrong_register_count = vec![STATE_VERSION];
