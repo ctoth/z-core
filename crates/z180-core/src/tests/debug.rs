@@ -457,3 +457,38 @@ fn insn_trace_configuration_and_ring_round_trip_in_save_state() {
     assert_ne!(original.step(), 0);
     assert_eq!(resumed.drain_insn_trace(), original.drain_insn_trace());
 }
+
+#[test]
+fn partial_iterator_drains_discard_the_tail_and_keep_ring_storage() {
+    let mut cpu = machine();
+    cpu.event_capacity = 3;
+    cpu.events = VecDeque::with_capacity(3);
+    cpu.set_insn_trace(Some(3));
+    cpu.add_mem_watch(0, 16, WatchKind::Read);
+    for _ in 0..5 {
+        cpu.step();
+    }
+    let expected_events = cpu.events.clone();
+    let expected_trace = cpu.insn_trace.clone();
+    let event_capacity = cpu.events.capacity();
+    let trace_capacity = cpu.insn_trace.capacity();
+    assert!(cpu.events_lost());
+    {
+        let mut events = cpu.drain_events_iter();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events.next(), expected_events.front().cloned());
+        assert_eq!(events.next_back(), expected_events.back().cloned());
+    }
+    {
+        let mut trace = cpu.drain_insn_trace_iter();
+        assert_eq!(trace.len(), 3);
+        assert_eq!(trace.next(), expected_trace.front().cloned());
+    }
+    assert!(cpu.events.is_empty());
+    assert!(cpu.insn_trace.is_empty());
+    assert_eq!(cpu.events.capacity(), event_capacity);
+    assert_eq!(cpu.insn_trace.capacity(), trace_capacity);
+    assert!(cpu.events_lost());
+    cpu.step();
+    assert_eq!(cpu.drain_insn_trace_iter().count(), 1);
+}

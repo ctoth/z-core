@@ -46,6 +46,14 @@ fn v0_1_0_state_v4_loads_resaves_and_resumes_exactly() {
     );
 
     assert_eq!(machine.cycle_count(), 37);
+    let mut reusable = Vec::with_capacity(V0_1_0_STATE_V4.len());
+    machine.save_state_into(&mut reusable).unwrap();
+    assert_eq!(reusable, V0_1_0_STATE_V4);
+    let mut fixed = vec![0; V0_1_0_STATE_V4.len()];
+    assert_eq!(
+        machine.save_state_to_slice(&mut fixed).unwrap(),
+        V0_1_0_STATE_V4
+    );
     assert_eq!(machine.reg(Reg::PC), 5);
     assert_eq!(machine.reg(Reg::SP), 0xeffe);
     assert_eq!(machine.reg(Reg::AF), 0x5a34);

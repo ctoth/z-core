@@ -87,6 +87,20 @@ needs the ring. Instruction tracing is disabled by default.
 With `state` enabled, `save_state()` serializes borrowed machine data directly
 into the returned byte buffer. It does not clone guest RAM, ROM, or queues.
 Save-state version 4 and its byte encoding remain unchanged.
+Use `save_state_into(&mut Vec<u8>)` to reuse a buffer, or
+`save_state_to_slice(&mut [u8])` to write without allocating. Both include the
+version byte. The Vec is cleared before writing and retains its capacity; the
+slice returns its written prefix. A short slice returns
+`SaveStateError::BufferTooSmall` and may contain a partial payload.
+
+`drain_events_iter()` and `drain_insn_trace_iter()` consume entries without
+allocating, in chronological order. Dropping a partial drain discards its
+remaining entries while keeping ring storage and the sticky event-loss flag.
+The existing Vec-returning drain methods remain available.
+
+Opcode execution tables omit mnemonic and operand formatting data. Both
+execution and disassembly tables are derived at compile time from the same
+definitions; disassembly retains no CPU handler pointers.
 
 ## Verify
 

@@ -331,7 +331,7 @@ impl<B: HostBus> Timeline<B> {
     ) -> Result<Option<WriteHit>, TimelineError<B::Error>> {
         self.seek_internal(start)?;
         let _watch = self.machine.add_mem_watch(base, size, WatchKind::Write);
-        let _ = self.machine.drain_events();
+        drop(self.machine.drain_events_iter());
         self.machine.clear_events_lost();
 
         while self.position.attempted_steps < end.attempted_steps {
@@ -342,8 +342,7 @@ impl<B: HostBus> Timeline<B> {
             }
             if let Some(event) = self
                 .machine
-                .drain_events()
-                .into_iter()
+                .drain_events_iter()
                 .find(|event| matches!(event, Event::MemWrite { phys, .. } if *phys >= base && u64::from(*phys) < u64::from(base) + u64::from(size)))
             {
                 return Ok(Some(WriteHit {
@@ -367,17 +366,17 @@ impl<B: HostBus> Timeline<B> {
                 checkpoint.position.attempted_steps <= target.attempted_steps
                     && checkpoint.position.actions <= target.actions
             })
-            .cloned()
             .ok_or(TimelineError::InvalidPosition(target))?;
 
         self.machine
             .load_state(&checkpoint.state)
             .map_err(TimelineError::State)?;
+        let position = checkpoint.position;
         self.bus
-            .begin_playback(checkpoint.position.bus_records)
+            .begin_playback(position.bus_records)
             .map_err(map_control_error)?;
         self.mode = Mode::Playback;
-        self.position = checkpoint.position;
+        self.position = position;
 
         while self.position.attempted_steps < target.attempted_steps {
             let _outcome = self.replay_next_attempt(false)?;
@@ -507,22 +506,29 @@ impl<B: HostBus> Timeline<B> {
             let record = self
                 .actions
                 .get(index)
-                .cloned()
                 .ok_or(TimelineError::ActionDivergence { action: index })?;
             if record.attempted_step != self.position.attempted_steps {
                 return Err(TimelineError::ActionDivergence { action: index });
             }
-            match record.action {
+            match &record.action {
                 RecordedAction::Stimulus { stimulus, outcome } => {
-                    if execute_stimulus(&mut self.machine, &stimulus) != outcome {
+                    if execute_stimulus(&mut self.machine, stimulus) != *outcome {
                         return Err(TimelineError::ActionDivergence { action: index });
                     }
                 }
                 RecordedAction::Drain { output, drained } => {
-                    let actual = execute_drain(&mut self.machine, &output);
-                    if actual != drained
-                        && !(ignore_event_drain_mismatch && output == Output::Events)
-                    {
+                    let matches = match (output, drained) {
+                        (Output::Events, Drained::Events(expected)) => self
+                            .machine
+                            .drain_events_iter()
+                            .eq(expected.iter().cloned()),
+                        (Output::InstructionTrace, Drained::InstructionTrace(expected)) => self
+                            .machine
+                            .drain_insn_trace_iter()
+                            .eq(expected.iter().cloned()),
+                        _ => &execute_drain(&mut self.machine, output) == drained,
+                    };
+                    if !(matches || ignore_event_drain_mismatch && *output == Output::Events) {
                         return Err(TimelineError::ActionDivergence { action: index });
                     }
                 }

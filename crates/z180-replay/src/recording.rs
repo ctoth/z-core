@@ -1,16 +1,17 @@
 use super::*;
+use std::borrow::Cow;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Recording {
-    format: String,
+struct Recording<'a> {
+    format: Cow<'a, str>,
     version: u32,
     options: Options,
     position: Position,
-    records: Vec<BusRecord>,
-    actions: Vec<ActionRecord>,
-    attempts: Vec<AttemptRecord>,
-    checkpoints: VecDeque<Checkpoint>,
+    records: Cow<'a, [BusRecord]>,
+    actions: Cow<'a, [ActionRecord]>,
+    attempts: Cow<'a, [AttemptRecord]>,
+    checkpoints: Cow<'a, VecDeque<Checkpoint>>,
 }
 
 impl<B: HostBus> Timeline<B> {
@@ -83,14 +84,14 @@ impl<B: HostBus> Timeline<B> {
             .try_borrow()
             .map_err(|_| "bus is borrowed")?;
         let recording = Recording {
-            format: "z180-replay".into(),
+            format: Cow::Borrowed("z180-replay"),
             version: 1,
             options: self.options,
             position: self.position,
-            records: bus.records.clone(),
-            actions: self.actions.clone(),
-            attempts: self.attempts.clone(),
-            checkpoints: self.checkpoints.clone(),
+            records: Cow::Borrowed(&bus.records),
+            actions: Cow::Borrowed(&self.actions),
+            attempts: Cow::Borrowed(&self.attempts),
+            checkpoints: Cow::Borrowed(&self.checkpoints),
         };
         serde_json::to_vec(&recording).map_err(|error| error.to_string())
     }
@@ -110,7 +111,7 @@ impl<B: HostBus> Timeline<B> {
         }
         let mut timeline = Self::new(MachineConfig::default(), bus, recording.options)
             .map_err(|e| e.to_string())?;
-        timeline.actions = recording.actions;
+        timeline.actions = recording.actions.into_owned();
         timeline.action_heap_bytes = timeline
             .actions
             .iter()
@@ -126,9 +127,9 @@ impl<B: HostBus> Timeline<B> {
                 _ => 0,
             })
             .sum();
-        timeline.attempts = recording.attempts;
-        timeline.checkpoints = recording.checkpoints;
-        timeline.bus.shared.borrow_mut().records = recording.records;
+        timeline.attempts = recording.attempts.into_owned();
+        timeline.checkpoints = recording.checkpoints.into_owned();
+        timeline.bus.shared.borrow_mut().records = recording.records.into_owned();
         let start = timeline.checkpoints[0].position;
         if start.attempted_steps != 0 || start.actions != 0 || start.bus_records != 0 {
             return Err("missing initial checkpoint".into());

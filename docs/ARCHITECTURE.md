@@ -146,9 +146,11 @@ operation calls `HostBus` or triggers memory watches.
 
 `optable.rs` is the instruction metadata authority. Each descriptor contains
 the mnemonic, operand kinds, encoded length, timing form, and handler pointer.
-The interpreter dispatch and `disassemble_one()` consume those descriptors;
-there is no separate disassembler opcode table. Missing handlers represent
-undefined encodings and enter the Z180 TRAP path.
+Const builders derive two views from those definitions. Interpreter entries
+contain only length, timing, and handler; disassembly entries contain mnemonic,
+operand kinds, length, and an implemented flag. Disassembly retains no handler
+pointers. The views have one authority and need no runtime initialization.
+Missing handlers represent undefined encodings and enter the Z180 TRAP path.
 
 `ioregs.rs` is the internal-register authority. Each of its 64 entries records
 the reset byte, read and write masks, variant availability, and read/write
