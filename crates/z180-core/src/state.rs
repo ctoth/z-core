@@ -1,4 +1,5 @@
 use super::*;
+use alloc::borrow::Cow;
 
 #[cfg(feature = "state")]
 pub(super) const STATE_VERSION: u8 = 4;
@@ -9,13 +10,15 @@ pub(super) const STATE_VERSION: u8 = 4;
     clippy::struct_excessive_bools,
     reason = "the save-state schema mirrors the independent hardware bits in Z180 exactly"
 )]
-pub(super) struct SavedState {
+// Cow serializes exactly like the underlying value: saves borrow the live
+// machine, while deserialization owns every buffer before committing a load.
+pub(super) struct SavedState<'a> {
     registers: Registers,
-    memory: Memory,
+    memory: Cow<'a, Memory>,
     instruction_pc: u16,
     cycle_count: u64,
     variant: Variant,
-    pub(super) io_regs: Vec<u8>,
+    pub(super) io_regs: Cow<'a, [u8]>,
     timing_branch_taken: bool,
     timing_repeat_iterations: u16,
     timing_memory_waits: u32,
@@ -45,26 +48,26 @@ pub(super) struct SavedState {
     asci_tx_shift: [Option<u8>; 2],
     asci_tx_cycles: [u64; 2],
     asci_tx_clocked: [bool; 2],
-    asci_tx_output: [VecDeque<u8>; 2],
+    asci_tx_output: [Cow<'a, VecDeque<u8>>; 2],
     asci_rx_shift: [Option<u8>; 2],
     asci_rx_cycles: [u64; 2],
     asci_rx_clocked: [bool; 2],
-    asci_rx_fifo: [VecDeque<u8>; 2],
+    asci_rx_fifo: [Cow<'a, VecDeque<u8>>; 2],
     csio_rx_shift: Option<u8>,
     csio_cycles: u64,
     csio_clocked: bool,
-    csio_tx_output: VecDeque<u8>,
+    csio_tx_output: Cow<'a, VecDeque<u8>>,
     event_capacity: usize,
-    events: Vec<Event>,
+    events: Cow<'a, VecDeque<Event>>,
     events_lost: bool,
-    mem_watches: Vec<MemWatch>,
+    mem_watches: Cow<'a, [MemWatch]>,
     next_watch_id: u64,
     io_trace: bool,
     irq_trace: bool,
     pc_watch: Option<u16>,
     pc_watch_hits: u64,
     insn_trace_capacity: Option<usize>,
-    insn_trace: Vec<TraceEntry>,
+    insn_trace: Cow<'a, VecDeque<TraceEntry>>,
 }
 
 impl<B: HostBus> Z180<B> {
@@ -72,11 +75,11 @@ impl<B: HostBus> Z180<B> {
     pub fn save_state(&self) -> Vec<u8> {
         let state = SavedState {
             registers: self.registers,
-            memory: self.memory.clone(),
+            memory: Cow::Borrowed(&self.memory),
             instruction_pc: self.instruction_pc,
             cycle_count: self.cycle_count,
             variant: self.variant,
-            io_regs: self.io_regs.to_vec(),
+            io_regs: Cow::Borrowed(&self.io_regs),
             timing_branch_taken: self.timing_branch_taken,
             timing_repeat_iterations: self.timing_repeat_iterations,
             timing_memory_waits: self.timing_memory_waits,
@@ -106,34 +109,32 @@ impl<B: HostBus> Z180<B> {
             asci_tx_shift: self.asci_tx_shift,
             asci_tx_cycles: self.asci_tx_cycles,
             asci_tx_clocked: self.asci_tx_clocked,
-            asci_tx_output: self.asci_tx_output.clone(),
+            asci_tx_output: self.asci_tx_output.each_ref().map(Cow::Borrowed),
             asci_rx_shift: self.asci_rx_shift,
             asci_rx_cycles: self.asci_rx_cycles,
             asci_rx_clocked: self.asci_rx_clocked,
-            asci_rx_fifo: self.asci_rx_fifo.clone(),
+            asci_rx_fifo: self.asci_rx_fifo.each_ref().map(Cow::Borrowed),
             csio_rx_shift: self.csio_rx_shift,
             csio_cycles: self.csio_cycles,
             csio_clocked: self.csio_clocked,
-            csio_tx_output: self.csio_tx_output.clone(),
+            csio_tx_output: Cow::Borrowed(&self.csio_tx_output),
             event_capacity: self.event_capacity,
-            events: self.events.iter().cloned().collect(),
+            events: Cow::Borrowed(&self.events),
             events_lost: self.events_lost,
-            mem_watches: self.mem_watches.clone(),
+            mem_watches: Cow::Borrowed(&self.mem_watches),
             next_watch_id: self.next_watch_id,
             io_trace: self.io_trace,
             irq_trace: self.irq_trace,
             pc_watch: self.pc_watch,
             pc_watch_hits: self.pc_watch_hits,
             insn_trace_capacity: self.insn_trace_capacity,
-            insn_trace: self.insn_trace.iter().cloned().collect(),
+            insn_trace: Cow::Borrowed(&self.insn_trace),
         };
 
-        let mut bytes = Vec::new();
-        bytes.push(STATE_VERSION);
-        if let Ok(payload) = postcard::to_allocvec(&state) {
-            bytes.extend_from_slice(&payload);
-        }
-        bytes
+        // Postcard tuples have no framing, so this preserves the v4 version
+        // byte plus payload while writing both into the same allocation.
+        postcard::to_allocvec(&(STATE_VERSION, state))
+            .unwrap_or_else(|_| alloc::vec![STATE_VERSION])
     }
     #[cfg(feature = "state")]
     /// Replaces the current machine state from a versioned save-state payload.
@@ -151,7 +152,7 @@ impl<B: HostBus> Z180<B> {
         let state: SavedState = postcard::from_bytes(payload).map_err(|_| StateError::Decode)?;
         let io_regs: [u8; IO_REGISTER_COUNT] = state
             .io_regs
-            .as_slice()
+            .as_ref()
             .try_into()
             .map_err(|_| StateError::Decode)?;
         let insn_trace_is_valid = match state.insn_trace_capacity {
@@ -166,21 +167,24 @@ impl<B: HostBus> Z180<B> {
         {
             return Err(StateError::Decode);
         }
-        let mut events = VecDeque::new();
-        if events.try_reserve_exact(state.event_capacity).is_err() {
-            return Err(StateError::Decode);
-        }
-        events.extend(state.events.iter().cloned());
-        let mut insn_trace = VecDeque::new();
-        if let Some(capacity) = state.insn_trace_capacity
-            && insn_trace.try_reserve_exact(capacity).is_err()
+        let mut events = state.events.into_owned();
+        if events
+            .try_reserve_exact(state.event_capacity - events.len())
+            .is_err()
         {
             return Err(StateError::Decode);
         }
-        insn_trace.extend(state.insn_trace.iter().cloned());
+        let mut insn_trace = state.insn_trace.into_owned();
+        if let Some(capacity) = state.insn_trace_capacity
+            && insn_trace
+                .try_reserve_exact(capacity - insn_trace.len())
+                .is_err()
+        {
+            return Err(StateError::Decode);
+        }
 
         self.registers = state.registers;
-        self.memory = state.memory;
+        self.memory = state.memory.into_owned();
         self.instruction_pc = state.instruction_pc;
         self.indexed_displacement = None;
         self.cycle_count = state.cycle_count;
@@ -216,19 +220,19 @@ impl<B: HostBus> Z180<B> {
         self.asci_tx_shift = state.asci_tx_shift;
         self.asci_tx_cycles = state.asci_tx_cycles;
         self.asci_tx_clocked = state.asci_tx_clocked;
-        self.asci_tx_output = state.asci_tx_output;
+        self.asci_tx_output = state.asci_tx_output.map(Cow::into_owned);
         self.asci_rx_shift = state.asci_rx_shift;
         self.asci_rx_cycles = state.asci_rx_cycles;
         self.asci_rx_clocked = state.asci_rx_clocked;
-        self.asci_rx_fifo = state.asci_rx_fifo;
+        self.asci_rx_fifo = state.asci_rx_fifo.map(Cow::into_owned);
         self.csio_rx_shift = state.csio_rx_shift;
         self.csio_cycles = state.csio_cycles;
         self.csio_clocked = state.csio_clocked;
-        self.csio_tx_output = state.csio_tx_output;
+        self.csio_tx_output = state.csio_tx_output.into_owned();
         self.event_capacity = state.event_capacity;
         self.events = events;
         self.events_lost = state.events_lost;
-        self.mem_watches = state.mem_watches;
+        self.mem_watches = state.mem_watches.into_owned();
         self.next_watch_id = state.next_watch_id;
         self.io_trace = state.io_trace;
         self.irq_trace = state.irq_trace;
