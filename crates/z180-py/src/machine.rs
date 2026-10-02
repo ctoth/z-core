@@ -331,8 +331,7 @@ impl Machine {
 
     fn drain_events(&mut self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
         self.inner
-            .drain_events()
-            .into_iter()
+            .drain_events_iter()
             .map(|event| event_dict(py, event))
             .collect()
     }
@@ -352,8 +351,7 @@ impl Machine {
 
     fn drain_insn_trace(&mut self, py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
         self.inner
-            .drain_insn_trace()
-            .into_iter()
+            .drain_insn_trace_iter()
             .map(|entry| trace_dict(py, entry))
             .collect()
     }

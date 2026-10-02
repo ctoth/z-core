@@ -232,3 +232,35 @@ fn determinism_timer_asci_dma_matches_after_ten_million_cycles() {
     assert_eq!(first_state, second_state);
     assert_eq!(first_events, second_events);
 }
+
+#[test]
+fn caller_owned_save_buffers_preserve_v4_bytes_and_machine_state() {
+    let mut cpu = machine();
+    cpu.mem_poke(0x1234, 0x55);
+    cpu.set_insn_trace(Some(4));
+    cpu.step();
+    let expected = cpu.save_state();
+    let mut reusable = vec![0xa5; expected.len() + 7];
+    let capacity = reusable.capacity();
+    cpu.save_state_into(&mut reusable).unwrap();
+    assert_eq!(reusable, expected);
+    assert_eq!(reusable.capacity(), capacity);
+    cpu.save_state_into(&mut reusable).unwrap();
+    assert_eq!(reusable, expected);
+
+    let mut exact = vec![0xcc; expected.len()];
+    assert_eq!(cpu.save_state_to_slice(&mut exact).unwrap(), expected);
+    let mut spare = vec![0xcc; expected.len() + 9];
+    assert_eq!(cpu.save_state_to_slice(&mut spare).unwrap(), expected);
+    assert_eq!(&spare[expected.len()..], &[0xcc; 9]);
+    assert_eq!(
+        cpu.save_state_to_slice(&mut []),
+        Err(SaveStateError::BufferTooSmall)
+    );
+    let mut short = vec![0; expected.len() - 1];
+    assert_eq!(
+        cpu.save_state_to_slice(&mut short),
+        Err(SaveStateError::BufferTooSmall)
+    );
+    assert_eq!(cpu.save_state(), expected);
+}

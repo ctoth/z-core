@@ -1,9 +1,9 @@
-use alloc::{format, string::String, string::ToString};
+use alloc::string::String;
 use core::fmt::Write as _;
 
 use crate::{
     HostBus, Z180,
-    optable::{Opcode, OperandKind},
+    optable::{DisassemblyOpcode, OperandKind},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,7 +53,7 @@ pub fn disassemble_one(bytes: &[u8], address: u16) -> Option<DisassembledInstruc
         return Some(data_byte(address, first));
     };
 
-    if descriptor.handler.is_none()
+    if !descriptor.implemented
         || descriptor.length == 0
         || bytes.len() < usize::from(descriptor.length)
     {
@@ -71,13 +71,13 @@ pub fn disassemble_one(bytes: &[u8], address: u16) -> Option<DisassembledInstruc
     })
 }
 
-fn decode(bytes: &[u8]) -> Option<(Opcode<DisassemblyBus>, u8, OpcodePage, usize)> {
+fn decode(bytes: &[u8]) -> Option<(DisassemblyOpcode, u8, OpcodePage, usize)> {
     let first = *bytes.first()?;
     match first {
         0xcb => {
             let opcode = *bytes.get(1)?;
             Some((
-                Z180::<DisassemblyBus>::CB_OPCODES[usize::from(opcode)],
+                Z180::<DisassemblyBus>::CB_DISASSEMBLY[usize::from(opcode)],
                 opcode,
                 OpcodePage::Cb,
                 2,
@@ -86,7 +86,7 @@ fn decode(bytes: &[u8]) -> Option<(Opcode<DisassemblyBus>, u8, OpcodePage, usize
         0xed => {
             let opcode = *bytes.get(1)?;
             Some((
-                Z180::<DisassemblyBus>::ED_OPCODES[usize::from(opcode)],
+                Z180::<DisassemblyBus>::ED_DISASSEMBLY[usize::from(opcode)],
                 opcode,
                 OpcodePage::Ed,
                 2,
@@ -98,22 +98,22 @@ fn decode(bytes: &[u8]) -> Option<(Opcode<DisassemblyBus>, u8, OpcodePage, usize
             if second == 0xcb {
                 let opcode = *bytes.get(3)?;
                 let descriptor = if iy {
-                    Z180::<DisassemblyBus>::FDCB_OPCODES[usize::from(opcode)]
+                    Z180::<DisassemblyBus>::FDCB_DISASSEMBLY[usize::from(opcode)]
                 } else {
-                    Z180::<DisassemblyBus>::DDCB_OPCODES[usize::from(opcode)]
+                    Z180::<DisassemblyBus>::DDCB_DISASSEMBLY[usize::from(opcode)]
                 };
                 Some((descriptor, opcode, OpcodePage::IndexCb { iy }, 4))
             } else {
                 let descriptor = if iy {
-                    Z180::<DisassemblyBus>::FD_OPCODES[usize::from(second)]
+                    Z180::<DisassemblyBus>::FD_DISASSEMBLY[usize::from(second)]
                 } else {
-                    Z180::<DisassemblyBus>::DD_OPCODES[usize::from(second)]
+                    Z180::<DisassemblyBus>::DD_DISASSEMBLY[usize::from(second)]
                 };
                 Some((descriptor, second, OpcodePage::Index { iy }, 2))
             }
         }
         opcode => Some((
-            Z180::<DisassemblyBus>::MAIN_OPCODES[usize::from(opcode)],
+            Z180::<DisassemblyBus>::MAIN_DISASSEMBLY[usize::from(opcode)],
             opcode,
             OpcodePage::Main,
             1,
@@ -122,7 +122,7 @@ fn decode(bytes: &[u8]) -> Option<(Opcode<DisassemblyBus>, u8, OpcodePage, usize
 }
 
 fn format_instruction(
-    descriptor: Opcode<DisassemblyBus>,
+    descriptor: DisassemblyOpcode,
     opcode: u8,
     page: OpcodePage,
     bytes: [u8; 4],
@@ -135,7 +135,7 @@ fn format_instruction(
     const JR_CONDITIONS: [&str; 4] = ["NZ", "Z", "NC", "C"];
     const ALU: [&str; 8] = ["ADD A", "ADC A", "SUB", "SBC A", "AND", "XOR", "OR", "CP"];
 
-    let mut text = descriptor.mnemonic.to_string();
+    let mut text = String::with_capacity(descriptor.mnemonic.len() + 8);
     let destination = REG8[usize::from((opcode >> 3) & 0x07)];
     let source = REG8[usize::from(opcode & 0x07)];
     let register_pair = REG16[usize::from((opcode >> 4) & 0x03)];
@@ -162,47 +162,65 @@ fn format_instruction(
         OpcodePage::Main | OpcodePage::Cb | OpcodePage::Ed => "",
     };
 
-    text = text.replace("{dst}", destination);
-    text = text.replace("{src}", source);
-    text = text.replace("{g}", destination);
-    text = text.replace("{r}", register);
-    text = text.replace("{rr}", register_pair);
-    text = text.replace("{qq}", stack_pair);
-    text = text.replace("{cc}", condition);
-    text = text.replace("{bit}", &((opcode >> 3) & 0x07).to_string());
-    text = text.replace("{vector}", &format!("{:02X}h", opcode & 0x38));
-    text = text.replace("{index}", index);
-    text = text.replace("{alu} A", ALU[usize::from((opcode >> 3) & 0x07)]);
-
-    if has_operand(descriptor.operands, OperandKind::IndirectIndex) {
-        let displacement = bytes[2].cast_signed();
-        let rendered = if displacement < 0 {
-            format!("-{:02X}h", displacement.unsigned_abs())
+    let mut remaining = descriptor.mnemonic;
+    while let Some(open) = remaining.find('{') {
+        let close = remaining[open..]
+            .find('}')
+            .expect("opcode template token must close")
+            + open;
+        let token = &remaining[open + 1..close];
+        let literal = &remaining[..open];
+        if token == "d" {
+            text.push_str(literal.strip_suffix('+').unwrap_or(literal));
         } else {
-            format!("+{:02X}h", displacement.cast_unsigned())
-        };
-        text = text.replace("+{d}", &rendered);
+            text.push_str(literal);
+        }
+        remaining = &remaining[close + 1..];
+        match token {
+            "dst" | "g" => text.push_str(destination),
+            "src" => text.push_str(source),
+            "r" => text.push_str(register),
+            "rr" => text.push_str(register_pair),
+            "qq" => text.push_str(stack_pair),
+            "cc" => text.push_str(condition),
+            "index" => text.push_str(index),
+            "alu" => {
+                text.push_str(ALU[usize::from((opcode >> 3) & 0x07)]);
+                remaining = remaining
+                    .strip_prefix(" A")
+                    .expect("ALU template must name A");
+            }
+            "bit" => {
+                let _ = write!(text, "{}", (opcode >> 3) & 0x07);
+            }
+            "vector" => {
+                let _ = write!(text, "{:02X}h", opcode & 0x38);
+            }
+            "d" => {
+                let displacement = bytes[2].cast_signed();
+                let sign = if displacement < 0 { '-' } else { '+' };
+                let _ = write!(text, "{sign}{:02X}h", displacement.unsigned_abs());
+            }
+            "rel" => {
+                let displacement = bytes[usize::from(descriptor.length - 1)].cast_signed();
+                let target = address
+                    .wrapping_add(u16::from(descriptor.length))
+                    .wrapping_add_signed(i16::from(displacement));
+                let _ = write!(text, "{target:04X}h");
+            }
+            "nn" => {
+                let start = usize::from(descriptor.length - 2);
+                let value = u16::from_le_bytes([bytes[start], bytes[start + 1]]);
+                let _ = write!(text, "{value:04X}h");
+            }
+            "n" => {
+                let value = bytes[usize::from(descriptor.length - 1)];
+                let _ = write!(text, "{value:02X}h");
+            }
+            _ => unreachable!("unknown opcode template token"),
+        }
     }
-    if has_operand(descriptor.operands, OperandKind::Relative8) {
-        let displacement = bytes[usize::from(descriptor.length - 1)].cast_signed();
-        let target = address
-            .wrapping_add(u16::from(descriptor.length))
-            .wrapping_add_signed(i16::from(displacement));
-        text = text.replace("{rel}", &format!("{target:04X}h"));
-    }
-    if has_operand(descriptor.operands, OperandKind::Immediate16)
-        || has_operand(descriptor.operands, OperandKind::IndirectImmediate16)
-    {
-        let start = usize::from(descriptor.length - 2);
-        let value = u16::from_le_bytes([bytes[start], bytes[start + 1]]);
-        text = text.replace("{nn}", &format!("{value:04X}h"));
-    }
-    if has_operand(descriptor.operands, OperandKind::Immediate8)
-        || has_operand(descriptor.operands, OperandKind::PortImmediate)
-    {
-        let value = bytes[usize::from(descriptor.length - 1)];
-        text = text.replace("{n}", &format!("{value:02X}h"));
-    }
+    text.push_str(remaining);
     text
 }
 
@@ -218,7 +236,8 @@ fn data_bytes(address: u16, source: &[u8]) -> DisassembledInstruction {
     let len = source.len().min(4);
     let mut bytes = [0; 4];
     bytes[..len].copy_from_slice(&source[..len]);
-    let mut text = String::from("DB ");
+    let mut text = String::with_capacity(3 + 4 * len);
+    text.push_str("DB ");
     for (index, byte) in source[..len].iter().enumerate() {
         if index != 0 {
             text.push(',');
@@ -319,23 +338,23 @@ mod tests {
 
     fn assert_complete_if_implemented(bytes: [u8; 4], page: OpcodePage, opcode: u8) {
         let descriptor = match page {
-            OpcodePage::Main => Z180::<DisassemblyBus>::MAIN_OPCODES[usize::from(opcode)],
-            OpcodePage::Cb => Z180::<DisassemblyBus>::CB_OPCODES[usize::from(opcode)],
-            OpcodePage::Ed => Z180::<DisassemblyBus>::ED_OPCODES[usize::from(opcode)],
+            OpcodePage::Main => Z180::<DisassemblyBus>::MAIN_DISASSEMBLY[usize::from(opcode)],
+            OpcodePage::Cb => Z180::<DisassemblyBus>::CB_DISASSEMBLY[usize::from(opcode)],
+            OpcodePage::Ed => Z180::<DisassemblyBus>::ED_DISASSEMBLY[usize::from(opcode)],
             OpcodePage::Index { iy: false } => {
-                Z180::<DisassemblyBus>::DD_OPCODES[usize::from(opcode)]
+                Z180::<DisassemblyBus>::DD_DISASSEMBLY[usize::from(opcode)]
             }
             OpcodePage::Index { iy: true } => {
-                Z180::<DisassemblyBus>::FD_OPCODES[usize::from(opcode)]
+                Z180::<DisassemblyBus>::FD_DISASSEMBLY[usize::from(opcode)]
             }
             OpcodePage::IndexCb { iy: false } => {
-                Z180::<DisassemblyBus>::DDCB_OPCODES[usize::from(opcode)]
+                Z180::<DisassemblyBus>::DDCB_DISASSEMBLY[usize::from(opcode)]
             }
             OpcodePage::IndexCb { iy: true } => {
-                Z180::<DisassemblyBus>::FDCB_OPCODES[usize::from(opcode)]
+                Z180::<DisassemblyBus>::FDCB_DISASSEMBLY[usize::from(opcode)]
             }
         };
-        if descriptor.handler.is_none() {
+        if !descriptor.implemented {
             return;
         }
         let decoded = disassemble_one(&bytes, 0).expect("four bytes always provide one record");

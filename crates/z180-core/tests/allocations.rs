@@ -1,91 +1,22 @@
 //! Guard the transient heap cost of constructing and saving embedded machines.
 
 use core::convert::Infallible;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
-
+#[path = "../../../tests/support/heap.rs"]
+mod heap;
+use heap::{allocation_calls, measure};
 use z180_core::{HostBus, MachineConfig, RegionDef, RegionKind, Z180};
 
-#[derive(Clone, Copy, Default)]
-struct AllocationWindow {
-    active: bool,
-    live: isize,
-    peak: usize,
-}
-
-thread_local! {
-    static WINDOW: Cell<AllocationWindow> = const { Cell::new(AllocationWindow {
-        active: false, live: 0, peak: 0,
-    }) };
-}
-
-fn record(delta: isize) {
-    let _ = WINDOW.try_with(|window| {
-        let mut current = window.get();
-        if current.active {
-            current.live += delta;
-            current.peak = current.peak.max(current.live.max(0) as usize);
-            window.set(current);
-        }
-    });
-}
-
-struct TrackingAllocator;
-
-// SAFETY: Every allocation operation delegates to System with the original
-// pointer and layout. Tracking only uses allocation-free thread-local Cells.
-unsafe impl GlobalAlloc for TrackingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: The caller supplies a valid allocation layout.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record(layout.size() as isize);
-        }
-        pointer
+#[test]
+fn disassembly_allocates_only_its_result_string() {
+    for (bytes, expected) in [
+        (&[0x00][..], "NOP"),
+        (&[0xfd, 0xcb, 0xfe, 0x46][..], "BIT 0,(IY-02h)"),
+    ] {
+        let (instruction, _) = measure(|| z180_core::disassemble_one(bytes, 0).unwrap());
+        let calls = allocation_calls();
+        assert_eq!(instruction.text, expected);
+        assert_eq!(calls, 1, "disassembly allocated or grew {calls} buffers");
     }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record(-(layout.size() as isize));
-        // SAFETY: The caller supplies the original allocation and layout.
-        unsafe { System.dealloc(pointer, layout) };
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        // SAFETY: The caller supplies a live allocation and valid new size.
-        let result = unsafe { System.realloc(pointer, layout, size) };
-        if !result.is_null() {
-            record(size as isize - layout.size() as isize);
-        }
-        result
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: TrackingAllocator = TrackingAllocator;
-
-fn measure<T>(operation: impl FnOnce() -> T) -> (T, usize) {
-    struct StopTracking;
-    impl Drop for StopTracking {
-        fn drop(&mut self) {
-            WINDOW.with(|window| {
-                let mut current = window.get();
-                current.active = false;
-                window.set(current);
-            });
-        }
-    }
-    WINDOW.with(|window| {
-        assert!(!window.get().active);
-        window.set(AllocationWindow {
-            active: true,
-            ..AllocationWindow::default()
-        });
-    });
-    let guard = StopTracking;
-    let result = operation();
-    let peak = WINDOW.with(|window| window.get().peak);
-    drop(guard);
-    (result, peak)
 }
 
 struct NullBus;
@@ -166,4 +97,57 @@ fn saving_allocates_only_the_output_buffer() {
     assert_eq!(resumed.mem_peek(0x1234), 0x5a);
     assert_eq!(resumed.mem_peek(64 * 1024), 0xa5);
     assert_eq!(resumed.save_state(), saved);
+}
+
+#[cfg(feature = "state")]
+#[test]
+fn caller_owned_save_buffers_do_not_allocate_when_sized() {
+    let machine = Z180::new(MachineConfig::default(), NullBus).unwrap();
+    let expected = machine.save_state();
+    let mut buffer = Vec::with_capacity(expected.len());
+    let (result, peak) = measure(|| machine.save_state_into(&mut buffer));
+    result.unwrap();
+    assert_eq!(allocation_calls(), 0);
+    assert_eq!(peak, 0);
+    assert_eq!(buffer, expected);
+    let mut slice = vec![0; expected.len()];
+    let (saved, peak) = measure(|| machine.save_state_to_slice(&mut slice).unwrap());
+    assert_eq!(allocation_calls(), 0);
+    assert_eq!(peak, 0);
+    assert_eq!(saved, expected);
+}
+
+#[test]
+fn iterator_drains_do_not_allocate() {
+    let mut machine = Z180::new(MachineConfig::default(), NullBus).unwrap();
+    machine.set_insn_trace(Some(8));
+    machine.add_mem_watch(0, 1, z180_core::WatchKind::Read);
+    machine.step();
+    let (counts, peak) = measure(|| {
+        (
+            machine.drain_events_iter().count(),
+            machine.drain_insn_trace_iter().count(),
+        )
+    });
+    assert_eq!(counts, (1, 1));
+    assert_eq!(allocation_calls(), 0);
+    assert_eq!(peak, 0);
+}
+
+#[test]
+fn all_opcode_pages_format_with_one_result_allocation() {
+    for opcode in 0..=255 {
+        for bytes in [
+            [opcode, 0x80, 0x12, 0],
+            [0xcb, opcode, 0, 0],
+            [0xed, opcode, 0x34, 0x12],
+            [0xdd, opcode, 0x80, 0x12],
+            [0xfd, opcode, 0x7f, 0x12],
+            [0xdd, 0xcb, 0x80, opcode],
+            [0xfd, 0xcb, 0x7f, opcode],
+        ] {
+            let (instruction, _) = measure(|| z180_core::disassemble_one(&bytes, 0xffff).unwrap());
+            assert_eq!(allocation_calls(), 1, "{bytes:02x?}: {}", instruction.text);
+        }
+    }
 }

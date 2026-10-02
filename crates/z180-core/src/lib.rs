@@ -25,6 +25,8 @@ mod peripherals;
 mod registers;
 #[cfg(feature = "state")]
 mod state;
+#[cfg(feature = "state")]
+pub use state::SaveStateError;
 #[cfg(all(test, feature = "state"))]
 use state::{STATE_VERSION, SavedState};
 
@@ -560,7 +562,6 @@ impl<B: HostBus> Z180<B> {
                 self.finish_step(u32::from(cycles).saturating_add(self.wait_cycles())),
             ));
         };
-        debug_assert!(!descriptor.mnemonic.is_empty());
         debug_assert!(descriptor.length != 0);
         for _ in 0..descriptor.length {
             self.registers.increment_pc();

@@ -97,3 +97,8 @@ assert_eq!(timeline.position(), after_nop);
 The concrete error enums intentionally preserve the distinction between a
 live host error, a recorded historical host failure, a journal divergence,
 and an invalid checkpoint or position.
+
+Export borrows the journal and checkpoint buffers while serializing the
+unchanged version-1 JSON format. Seek loads a checkpoint without copying its
+byte buffer. Playback compares event and instruction-trace drains directly
+against recorded batches, without allocating temporary batches.

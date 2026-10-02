@@ -70,10 +70,78 @@ pub(super) struct SavedState<'a> {
     insn_trace: Cow<'a, VecDeque<TraceEntry>>,
 }
 
+/// Failure while writing a save state into caller-owned storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SaveStateError {
+    BufferTooSmall,
+    Serialize,
+}
+impl core::fmt::Display for SaveStateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::BufferTooSmall => "save state buffer is too small",
+            Self::Serialize => "save state could not be serialized",
+        })
+    }
+}
+impl core::error::Error for SaveStateError {}
+impl From<postcard::Error> for SaveStateError {
+    fn from(error: postcard::Error) -> Self {
+        match error {
+            postcard::Error::SerializeBufferFull => Self::BufferTooSmall,
+            _ => Self::Serialize,
+        }
+    }
+}
+
+// Extend is implemented for Vec itself, but not for a mutable reference to it.
+struct SaveBuffer<'a>(&'a mut Vec<u8>);
+impl Extend<u8> for SaveBuffer<'_> {
+    fn extend<T: IntoIterator<Item = u8>>(&mut self, bytes: T) {
+        self.0.extend(bytes);
+    }
+}
+
 impl<B: HostBus> Z180<B> {
     #[cfg(feature = "state")]
     pub fn save_state(&self) -> Vec<u8> {
-        let state = SavedState {
+        // Tuples have no framing, preserving the v4 version byte plus payload.
+        postcard::to_allocvec(&(STATE_VERSION, self.saved_state()))
+            .unwrap_or_else(|_| alloc::vec![STATE_VERSION])
+    }
+
+    /// Write a v4 save state, replacing the buffer contents and retaining its capacity.
+    ///
+    /// # Errors
+    /// Returns a serialization error and clears the output on failure.
+    pub fn save_state_into(&self, buffer: &mut Vec<u8>) -> Result<(), SaveStateError> {
+        buffer.clear();
+        if let Err(error) =
+            postcard::to_extend(&(STATE_VERSION, self.saved_state()), SaveBuffer(buffer))
+        {
+            buffer.clear();
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    /// Write a v4 save state without allocating, returning the written prefix.
+    /// The unused suffix is unchanged. On error the buffer may contain a partial
+    /// payload; the machine is unchanged.
+    ///
+    /// # Errors
+    /// Returns `BufferTooSmall` when storage is insufficient, or a serialization error.
+    pub fn save_state_to_slice<'a>(
+        &self,
+        buffer: &'a mut [u8],
+    ) -> Result<&'a [u8], SaveStateError> {
+        postcard::to_slice(&(STATE_VERSION, self.saved_state()), buffer)
+            .map(|written| &*written)
+            .map_err(Into::into)
+    }
+
+    fn saved_state(&self) -> SavedState<'_> {
+        SavedState {
             registers: self.registers,
             memory: Cow::Borrowed(&self.memory),
             instruction_pc: self.instruction_pc,
@@ -129,12 +197,7 @@ impl<B: HostBus> Z180<B> {
             pc_watch_hits: self.pc_watch_hits,
             insn_trace_capacity: self.insn_trace_capacity,
             insn_trace: Cow::Borrowed(&self.insn_trace),
-        };
-
-        // Postcard tuples have no framing, so this preserves the v4 version
-        // byte plus payload while writing both into the same allocation.
-        postcard::to_allocvec(&(STATE_VERSION, state))
-            .unwrap_or_else(|_| alloc::vec![STATE_VERSION])
+        }
     }
     #[cfg(feature = "state")]
     /// Replaces the current machine state from a versioned save-state payload.

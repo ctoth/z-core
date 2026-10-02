@@ -52,10 +52,16 @@ impl<B: HostBus> Z180<B> {
     pub fn pc_watch_hits(&self) -> u64 {
         self.pc_watch_hits
     }
+    /// Drain retained entries in chronological order without allocating.
+    /// Dropping the iterator discards unconsumed entries. Ring storage is retained.
+    /// The sticky event-loss flag is unchanged.
+    pub fn drain_events_iter(
+        &mut self,
+    ) -> impl ExactSizeIterator<Item = Event> + DoubleEndedIterator + '_ {
+        self.events.drain(..)
+    }
     pub fn drain_events(&mut self) -> Vec<Event> {
-        let mut drained = Vec::with_capacity(self.events.len());
-        drained.extend(self.events.drain(..));
-        drained
+        self.drain_events_iter().collect()
     }
     pub fn events_lost(&self) -> bool {
         self.events_lost
@@ -84,10 +90,15 @@ impl<B: HostBus> Z180<B> {
         }
         self.insn_trace_capacity = Some(capacity);
     }
+    /// Drain retained entries in chronological order without allocating.
+    /// Dropping the iterator discards unconsumed entries. Ring storage is retained.
+    pub fn drain_insn_trace_iter(
+        &mut self,
+    ) -> impl ExactSizeIterator<Item = TraceEntry> + DoubleEndedIterator + '_ {
+        self.insn_trace.drain(..)
+    }
     pub fn drain_insn_trace(&mut self) -> Vec<TraceEntry> {
-        let mut drained = Vec::with_capacity(self.insn_trace.len());
-        drained.extend(self.insn_trace.drain(..));
-        drained
+        self.drain_insn_trace_iter().collect()
     }
     pub(super) fn begin_insn_trace(&mut self, pc: u16) {
         let Some(capacity) = self.insn_trace_capacity else {

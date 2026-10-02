@@ -1049,19 +1049,174 @@ const fn build_ed_table<B: HostBus>() -> [Opcode<B>; 256] {
     table
 }
 
+/// The execution path needs no text or operand metadata.
+#[derive(Debug)]
+pub(crate) struct RuntimeOpcode<B: HostBus> {
+    pub(crate) length: u8,
+    pub(crate) cycles: Option<CycleCount>,
+    pub(crate) handler: Option<Handler<B>>,
+}
+impl<B: HostBus> Clone for RuntimeOpcode<B> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<B: HostBus> Copy for RuntimeOpcode<B> {}
+
+/// No handler pointers: disassembly does not retain executable CPU code.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DisassemblyOpcode {
+    pub(crate) mnemonic: &'static str,
+    pub(crate) operands: [OperandKind; 2],
+    pub(crate) length: u8,
+    pub(crate) implemented: bool,
+}
+
+const fn runtime_table<B: HostBus>(source: [Opcode<B>; 256]) -> [RuntimeOpcode<B>; 256] {
+    let mut table = [RuntimeOpcode {
+        length: 0,
+        cycles: None,
+        handler: None,
+    }; 256];
+    let mut i = 0;
+    while i < 256 {
+        table[i] = RuntimeOpcode {
+            length: source[i].length,
+            cycles: source[i].cycles,
+            handler: source[i].handler,
+        };
+        i += 1;
+    }
+    table
+}
+
+const fn disassembly_table<B: HostBus>(source: [Opcode<B>; 256]) -> [DisassemblyOpcode; 256] {
+    let mut table = [DisassemblyOpcode {
+        mnemonic: "",
+        operands: [OperandKind::None; 2],
+        length: 0,
+        implemented: false,
+    }; 256];
+    let mut i = 0;
+    while i < 256 {
+        table[i] = DisassemblyOpcode {
+            mnemonic: source[i].mnemonic,
+            operands: source[i].operands,
+            length: source[i].length,
+            implemented: source[i].handler.is_some(),
+        };
+        i += 1;
+    }
+    table
+}
+
 impl<B: HostBus> Z180<B> {
-    pub(crate) const MAIN_OPCODES: [Opcode<B>; 256] = build_main_table::<B>();
-    pub(crate) const CB_OPCODES: [Opcode<B>; 256] = build_cb_table::<B>();
-    pub(crate) const DD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, false>();
-    pub(crate) const FD_OPCODES: [Opcode<B>; 256] = build_index_table::<B, true>();
-    pub(crate) const DDCB_OPCODES: [Opcode<B>; 256] = build_index_cb_table::<B, false>();
-    pub(crate) const FDCB_OPCODES: [Opcode<B>; 256] = build_index_cb_table::<B, true>();
-    pub(crate) const ED_OPCODES: [Opcode<B>; 256] = build_ed_table::<B>();
+    pub(crate) const MAIN_OPCODES: [RuntimeOpcode<B>; 256] = runtime_table(build_main_table::<B>());
+    pub(crate) const MAIN_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_main_table::<B>());
+    #[cfg(test)]
+    const MAIN_DEFINITIONS: [Opcode<B>; 256] = build_main_table::<B>();
+    pub(crate) const CB_OPCODES: [RuntimeOpcode<B>; 256] = runtime_table(build_cb_table::<B>());
+    pub(crate) const CB_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_cb_table::<B>());
+    #[cfg(test)]
+    const CB_DEFINITIONS: [Opcode<B>; 256] = build_cb_table::<B>();
+    pub(crate) const DD_OPCODES: [RuntimeOpcode<B>; 256] =
+        runtime_table(build_index_table::<B, false>());
+    pub(crate) const DD_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_index_table::<B, false>());
+    #[cfg(test)]
+    const DD_DEFINITIONS: [Opcode<B>; 256] = build_index_table::<B, false>();
+    pub(crate) const FD_OPCODES: [RuntimeOpcode<B>; 256] =
+        runtime_table(build_index_table::<B, true>());
+    pub(crate) const FD_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_index_table::<B, true>());
+    #[cfg(test)]
+    const FD_DEFINITIONS: [Opcode<B>; 256] = build_index_table::<B, true>();
+    pub(crate) const DDCB_OPCODES: [RuntimeOpcode<B>; 256] =
+        runtime_table(build_index_cb_table::<B, false>());
+    pub(crate) const DDCB_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_index_cb_table::<B, false>());
+    #[cfg(test)]
+    const DDCB_DEFINITIONS: [Opcode<B>; 256] = build_index_cb_table::<B, false>();
+    pub(crate) const FDCB_OPCODES: [RuntimeOpcode<B>; 256] =
+        runtime_table(build_index_cb_table::<B, true>());
+    pub(crate) const FDCB_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_index_cb_table::<B, true>());
+    #[cfg(test)]
+    const FDCB_DEFINITIONS: [Opcode<B>; 256] = build_index_cb_table::<B, true>();
+    pub(crate) const ED_OPCODES: [RuntimeOpcode<B>; 256] = runtime_table(build_ed_table::<B>());
+    pub(crate) const ED_DISASSEMBLY: [DisassemblyOpcode; 256] =
+        disassembly_table(build_ed_table::<B>());
+    #[cfg(test)]
+    const ED_DEFINITIONS: [Opcode<B>; 256] = build_ed_table::<B>();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_descriptors_fit_two_machine_words() {
+        assert!(
+            core::mem::size_of_val(&Z180::<NullBus>::MAIN_OPCODES) / 256
+                <= 2 * core::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn projected_tables_preserve_every_definition() {
+        for (definitions, runtime, disassembly) in [
+            (
+                Z180::<NullBus>::MAIN_DEFINITIONS,
+                Z180::<NullBus>::MAIN_OPCODES,
+                Z180::<NullBus>::MAIN_DISASSEMBLY,
+            ),
+            (
+                Z180::<NullBus>::CB_DEFINITIONS,
+                Z180::<NullBus>::CB_OPCODES,
+                Z180::<NullBus>::CB_DISASSEMBLY,
+            ),
+            (
+                Z180::<NullBus>::DD_DEFINITIONS,
+                Z180::<NullBus>::DD_OPCODES,
+                Z180::<NullBus>::DD_DISASSEMBLY,
+            ),
+            (
+                Z180::<NullBus>::FD_DEFINITIONS,
+                Z180::<NullBus>::FD_OPCODES,
+                Z180::<NullBus>::FD_DISASSEMBLY,
+            ),
+            (
+                Z180::<NullBus>::DDCB_DEFINITIONS,
+                Z180::<NullBus>::DDCB_OPCODES,
+                Z180::<NullBus>::DDCB_DISASSEMBLY,
+            ),
+            (
+                Z180::<NullBus>::FDCB_DEFINITIONS,
+                Z180::<NullBus>::FDCB_OPCODES,
+                Z180::<NullBus>::FDCB_DISASSEMBLY,
+            ),
+            (
+                Z180::<NullBus>::ED_DEFINITIONS,
+                Z180::<NullBus>::ED_OPCODES,
+                Z180::<NullBus>::ED_DISASSEMBLY,
+            ),
+        ] {
+            for i in 0..256 {
+                assert_eq!(runtime[i].length, definitions[i].length);
+                assert_eq!(runtime[i].cycles, definitions[i].cycles);
+                assert_eq!(
+                    runtime[i].handler.map(|f| f as usize),
+                    definitions[i].handler.map(|f| f as usize)
+                );
+                assert_eq!(disassembly[i].length, definitions[i].length);
+                assert_eq!(disassembly[i].implemented, definitions[i].handler.is_some());
+                assert_eq!(disassembly[i].mnemonic, definitions[i].mnemonic);
+                assert_eq!(disassembly[i].operands, definitions[i].operands);
+            }
+        }
+    }
 
     struct NullBus;
 
@@ -1087,7 +1242,7 @@ mod tests {
 
     #[test]
     fn main_table_contains_every_documented_unprefixed_handler() {
-        let table = &Z180::<NullBus>::MAIN_OPCODES;
+        let table = &Z180::<NullBus>::MAIN_DEFINITIONS;
         for (opcode, entry) in table.iter().enumerate() {
             let expected = !matches!(opcode, 0xcb | 0xdd | 0xed | 0xfd);
             assert_eq!(entry.handler.is_some(), expected, "opcode {opcode:02x}");
@@ -1096,7 +1251,7 @@ mod tests {
 
     #[test]
     fn main_metadata_is_defined_once_in_the_table() {
-        let table = &Z180::<NullBus>::MAIN_OPCODES;
+        let table = &Z180::<NullBus>::MAIN_DEFINITIONS;
         assert_eq!(table[0x00].mnemonic, "NOP");
         assert_eq!(table[0x00].length, 1);
         assert_eq!(table[0x00].cycles, Some(CycleCount::Fixed(3)));
@@ -1114,7 +1269,7 @@ mod tests {
 
     #[test]
     fn cb_table_contains_every_documented_form_except_sll() {
-        let table = &Z180::<NullBus>::CB_OPCODES;
+        let table = &Z180::<NullBus>::CB_DEFINITIONS;
         for (opcode, entry) in table.iter().enumerate() {
             let expected = !(0x30..=0x37).contains(&opcode);
             assert_eq!(entry.handler.is_some(), expected, "CB {opcode:02x}");
@@ -1131,7 +1286,10 @@ mod tests {
 
     #[test]
     fn index_tables_contain_only_table_48_substitutions() {
-        for table in [&Z180::<NullBus>::DD_OPCODES, &Z180::<NullBus>::FD_OPCODES] {
+        for table in [
+            &Z180::<NullBus>::DD_DEFINITIONS,
+            &Z180::<NullBus>::FD_DEFINITIONS,
+        ] {
             for (opcode, entry) in table.iter().enumerate() {
                 let expected = matches!(
                     opcode,
@@ -1178,8 +1336,8 @@ mod tests {
     #[test]
     fn indexed_cb_tables_contain_only_documented_memory_forms() {
         for table in [
-            &Z180::<NullBus>::DDCB_OPCODES,
-            &Z180::<NullBus>::FDCB_OPCODES,
+            &Z180::<NullBus>::DDCB_DEFINITIONS,
+            &Z180::<NullBus>::FDCB_DEFINITIONS,
         ] {
             for (opcode, entry) in table.iter().enumerate() {
                 let expected = opcode & 0x07 == 6 && !(0x30..=0x37).contains(&opcode);
@@ -1193,7 +1351,7 @@ mod tests {
 
     #[test]
     fn ed_table_contains_exactly_the_populated_table_50_cells() {
-        let table = &Z180::<NullBus>::ED_OPCODES;
+        let table = &Z180::<NullBus>::ED_DEFINITIONS;
         assert_eq!(
             table.iter().filter(|entry| entry.handler.is_some()).count(),
             92
@@ -1209,13 +1367,13 @@ mod tests {
     #[test]
     fn every_implemented_opcode_has_um0050_timing() {
         for table in [
-            &Z180::<NullBus>::MAIN_OPCODES,
-            &Z180::<NullBus>::CB_OPCODES,
-            &Z180::<NullBus>::DD_OPCODES,
-            &Z180::<NullBus>::FD_OPCODES,
-            &Z180::<NullBus>::DDCB_OPCODES,
-            &Z180::<NullBus>::FDCB_OPCODES,
-            &Z180::<NullBus>::ED_OPCODES,
+            &Z180::<NullBus>::MAIN_DEFINITIONS,
+            &Z180::<NullBus>::CB_DEFINITIONS,
+            &Z180::<NullBus>::DD_DEFINITIONS,
+            &Z180::<NullBus>::FD_DEFINITIONS,
+            &Z180::<NullBus>::DDCB_DEFINITIONS,
+            &Z180::<NullBus>::FDCB_DEFINITIONS,
+            &Z180::<NullBus>::ED_DEFINITIONS,
         ] {
             for (opcode, entry) in table.iter().enumerate() {
                 assert_eq!(
@@ -1229,10 +1387,10 @@ mod tests {
 
     #[test]
     fn timing_metadata_covers_fixed_conditional_repeat_and_variant_rows() {
-        let main = &Z180::<NullBus>::MAIN_OPCODES;
-        let cb = &Z180::<NullBus>::CB_OPCODES;
-        let dd = &Z180::<NullBus>::DD_OPCODES;
-        let ed = &Z180::<NullBus>::ED_OPCODES;
+        let main = &Z180::<NullBus>::MAIN_DEFINITIONS;
+        let cb = &Z180::<NullBus>::CB_DEFINITIONS;
+        let dd = &Z180::<NullBus>::DD_DEFINITIONS;
+        let ed = &Z180::<NullBus>::ED_DEFINITIONS;
 
         assert_eq!(main[0x78].cycles, Some(CycleCount::Fixed(4)));
         assert_eq!(main[0x46].cycles, Some(CycleCount::Fixed(6)));

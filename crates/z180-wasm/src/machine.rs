@@ -256,7 +256,7 @@ impl Machine {
     #[wasm_bindgen(js_name = drainEvents)]
     pub fn drain_events(&mut self) -> Result<JsValue, JsValue> {
         let events = Array::new();
-        for event in self.inner.drain_events() {
+        for event in self.inner.drain_events_iter() {
             events.push(&event_value(event)?);
         }
         Ok(events.into())
@@ -280,7 +280,7 @@ impl Machine {
     #[wasm_bindgen(js_name = drainInsnTrace)]
     pub fn drain_insn_trace(&mut self) -> Result<JsValue, JsValue> {
         let entries = Array::new();
-        for entry in self.inner.drain_insn_trace() {
+        for entry in self.inner.drain_insn_trace_iter() {
             entries.push(&trace_value(entry)?);
         }
         Ok(entries.into())
