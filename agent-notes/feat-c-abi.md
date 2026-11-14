@@ -235,6 +235,12 @@ when actual implementation size calls for it.
 
 ## Surprises
 
+- The header-only newline correction was incomplete. A fresh detached checkout
+  created with core.autocrlf=true reproduced ten CRLF lines in the generated
+  preamble: cbindgen preserves newlines in cbindgen.toml's multiline header.
+  The checked-in header itself had zero CRLF. Applied eol=lf to the generator
+  configuration as well as its output, fixing both ends of the generation path.
+
 - Windows header verification reported "Bindings changed" while Linux passed.
   Reproduced using git cat-file --filters with core.autocrlf=true: checkout
   contained 741 CRLF sequences, generator contained none, and contents were
