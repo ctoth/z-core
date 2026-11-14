@@ -47,4 +47,3 @@ impl HostBus for CBus {
         Ok(())
     }
 }
-

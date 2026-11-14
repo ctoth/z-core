@@ -12,7 +12,8 @@ Working on feat/c-abi. The separate z180-c crate, all planned API families,
 generated C header, and focused Rust boundary tests are implemented locally.
 Core additions are queue counts and safe watch-ID conversion. Implementation,
 generated header, C example, documentation, and existing Windows/Linux CI
-integration are complete locally. No commit, push, or PR yet.
+integration are implemented and published in
+[PR #47](https://github.com/ctoth/z-core/pull/47). Remote CI is running.
 
 Verified locally with the explicitly authored test tasks:
 - `cargo test -p z180-c --lib tests::`
@@ -24,7 +25,7 @@ machines, debug drain sizing, serial RX/TX, event loss, state buffer sizing,
 state-restored watches, callback/mapper preservation, and disassembly. The board
 example ran with PC=1 and cycles=6. Header regeneration matched with cbindgen
 `--verify`; `git diff --check` was clean. No Linux execution or full PR CI has
-been performed; do not claim those checks passed.
+completed yet; do not claim those checks passed.
 
 Read: workspace Cargo.toml and README; core README and Cargo.toml;
 core lib.rs, access.rs, debug.rs, memory.rs, registers.rs, state.rs;
@@ -233,6 +234,11 @@ root README; existing .github/workflows/ci.yml; this note. Split further only
 when actual implementation size calls for it.
 
 ## Surprises
+
+- First PR CI run found surplus blank lines at EOF in binding bus.rs, lib.rs,
+  and types.rs. The formatter-output application had trimmed its comparison
+  range and left the old trailing blank line outside the replaced range.
+  Removed those exact trailing lines; retained the existing formatting check.
 
 - lib.rs:579 restores registers after a handler bus failure, not every side effect.
 - access.rs:103 and :193 contain the internal-I/O duplicate host accesses.

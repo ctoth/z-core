@@ -1482,4 +1482,3 @@ fn event_record(event: Event) -> z180_event {
 
 #[cfg(test)]
 mod tests;
-
