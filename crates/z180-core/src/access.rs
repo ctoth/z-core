@@ -1,6 +1,12 @@
 use super::*;
 
 impl<B: HostBus> Z180<B> {
+    pub(super) fn bus_context(&self) -> BusContext {
+        BusContext {
+            cycles: self.cycle_count,
+            pc: self.callback_pc,
+        }
+    }
     pub(super) fn read_logical(&mut self, logical: u16) -> u8 {
         self.timing_memory_waits = self
             .timing_memory_waits
@@ -30,7 +36,8 @@ impl<B: HostBus> Z180<B> {
         if self.bus_error.is_some() {
             return 0;
         }
-        let value = match self.memory.read(&mut self.bus, physical) {
+        let context = self.bus_context();
+        let value = match self.memory.read(&mut self.bus, physical, context) {
             Ok(value) => value,
             Err(error) => {
                 self.bus_error = Some(error);
@@ -51,7 +58,8 @@ impl<B: HostBus> Z180<B> {
         if self.bus_error.is_some() {
             return;
         }
-        let rom_write = match self.memory.write(&mut self.bus, physical, value) {
+        let context = self.bus_context();
+        let rom_write = match self.memory.write(&mut self.bus, physical, value, context) {
             Ok(rom_write) => rom_write,
             Err(error) => {
                 self.bus_error = Some(error);
@@ -100,7 +108,7 @@ impl<B: HostBus> Z180<B> {
             return 0;
         }
         let value = if let Some(index) = self.internal_io_index(port) {
-            if let Err(error) = self.bus.io_read(port) {
+            if let Err(error) = self.bus.io_read_context(port, self.bus_context()) {
                 self.bus_error = Some(error);
                 return 0;
             }
@@ -109,7 +117,7 @@ impl<B: HostBus> Z180<B> {
             self.timing_io_waits = self
                 .timing_io_waits
                 .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
-            match self.bus.io_read(port) {
+            match self.bus.io_read_context(port, self.bus_context()) {
                 Ok(value) => value,
                 Err(error) => {
                     self.bus_error = Some(error);
@@ -190,7 +198,7 @@ impl<B: HostBus> Z180<B> {
             return;
         }
         if let Some(index) = self.internal_io_index(port) {
-            if let Err(error) = self.bus.io_write(port, value) {
+            if let Err(error) = self.bus.io_write_context(port, value, self.bus_context()) {
                 self.bus_error = Some(error);
                 return;
             }
@@ -199,7 +207,7 @@ impl<B: HostBus> Z180<B> {
             self.timing_io_waits = self
                 .timing_io_waits
                 .saturating_add(u32::from(((self.io_regs[DCNTL] >> 4) & 0x03) + 1));
-            if let Err(error) = self.bus.io_write(port, value) {
+            if let Err(error) = self.bus.io_write_context(port, value, self.bus_context()) {
                 self.bus_error = Some(error);
                 return;
             }

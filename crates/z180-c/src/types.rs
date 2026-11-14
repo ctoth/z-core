@@ -81,6 +81,28 @@ pub struct z180_bus {
     pub io_read: Option<unsafe extern "C" fn(*mut c_void, u16, *mut u8) -> i32>,
     pub io_write: Option<unsafe extern "C" fn(*mut c_void, u16, u8) -> i32>,
 }
+/// Snapshot valid for the duration of a context callback. Copy it to retain it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct z180_bus_context {
+    pub cycles: u64,
+    pub pc: u16,
+}
+/// Alternative callbacks with immutable access context. Same lifetime, error and
+/// non-reentry rules as z180_bus. No callback may retain the context pointer.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct z180_context_bus {
+    pub user_data: *mut c_void,
+    pub mem_read:
+        Option<unsafe extern "C" fn(*mut c_void, u32, *const z180_bus_context, *mut u8) -> i32>,
+    pub mem_write:
+        Option<unsafe extern "C" fn(*mut c_void, u32, u8, *const z180_bus_context) -> i32>,
+    pub io_read:
+        Option<unsafe extern "C" fn(*mut c_void, u16, *const z180_bus_context, *mut u8) -> i32>,
+    pub io_write:
+        Option<unsafe extern "C" fn(*mut c_void, u16, u8, *const z180_bus_context) -> i32>,
+}
 /// Caller-owned diagnostic; optional on every fallible call. UTF-8, NUL terminated.
 #[repr(C)]
 pub struct z180_error {

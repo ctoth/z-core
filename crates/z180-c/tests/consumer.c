@@ -296,12 +296,36 @@ static void exercise_decode_and_creation_errors(void) {
     OK(z180_is_instruction_implemented(bytes, 1, &implemented, &error)); assert(implemented);
 }
 
+struct context_board { uint64_t cycles; uint16_t pc; unsigned reads; int32_t failure; };
+static int32_t context_read(void *data, uint32_t address, const z180_bus_context *context, uint8_t *value) {
+    struct context_board *b = (struct context_board *)data;
+    assert(context->cycles == b->cycles && context->pc == b->pc);
+    assert(address == b->pc);
+    b->reads++; *value = 0; return b->failure;
+}
+static void exercise_context(void) {
+    z180_config config; z180_machine *cpu = NULL; z180_error error; uint64_t elapsed;
+    struct context_board board = {0, 0, 0, 0};
+    z180_context_bus bus = {&board, context_read, NULL, NULL, NULL};
+    z180_region region = {0, 4096, Z180_REGION_EXTERNAL, NULL, 0};
+    OK(z180_config_init(&config, &error));
+    OK(z180_create_with_context(&config, &region, 1, &bus, &cpu, &error));
+    OK(z180_step(cpu, &elapsed, &error)); board.cycles += elapsed; board.pc = 1;
+    OK(z180_step(cpu, &elapsed, &error)); board.cycles += elapsed; board.pc = 0;
+    OK(z180_reset(cpu, &error));
+    OK(z180_step(cpu, &elapsed, &error)); board.cycles += elapsed; board.pc = 1; board.failure = -73;
+    assert(z180_step(cpu, &elapsed, &error) == Z180_HOST_ERROR);
+    assert(error.host_code == -73 && board.reads == 4);
+    z180_destroy(cpu);
+}
+
 int main(void) {
     assert(z180_abi_version() == 1);
     exercise_machine();
     exercise_callbacks();
     exercise_serial_and_loss();
     exercise_decode_and_creation_errors();
+    exercise_context();
     puts("C ABI consumer passed");
     return 0;
 }

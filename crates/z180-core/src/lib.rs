@@ -57,6 +57,13 @@ const FLAG_PV: u8 = 0x04;
 const FLAG_N: u8 = 0x02;
 const FLAG_C: u8 = 0x01;
 const FLAG_XY: u8 = FLAG_X | FLAG_Y;
+/// Immutable context at an access, at the core's instruction/service granularity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BusContext {
+    pub cycles: u64,
+    pub pc: u16,
+}
+
 pub trait HostBus {
     type Error;
 
@@ -64,6 +71,29 @@ pub trait HostBus {
     fn mem_write(&mut self, phys: u32, value: u8) -> Result<(), Self::Error>;
     fn io_read(&mut self, port: u16) -> Result<u8, Self::Error>;
     fn io_write(&mut self, port: u16, value: u8) -> Result<(), Self::Error>;
+
+    fn mem_read_context(&mut self, phys: u32, _context: BusContext) -> Result<u8, Self::Error> {
+        self.mem_read(phys)
+    }
+    fn mem_write_context(
+        &mut self,
+        phys: u32,
+        value: u8,
+        _context: BusContext,
+    ) -> Result<(), Self::Error> {
+        self.mem_write(phys, value)
+    }
+    fn io_read_context(&mut self, port: u16, _context: BusContext) -> Result<u8, Self::Error> {
+        self.io_read(port)
+    }
+    fn io_write_context(
+        &mut self,
+        port: u16,
+        value: u8,
+        _context: BusContext,
+    ) -> Result<(), Self::Error> {
+        self.io_write(port, value)
+    }
 }
 
 #[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
@@ -213,6 +243,7 @@ pub struct Z180<B: HostBus> {
     bus: B,
     bus_error: Option<B::Error>,
     instruction_pc: u16,
+    callback_pc: u16,
     indexed_displacement: Option<i8>,
     cycle_count: u64,
     variant: Variant,
@@ -296,6 +327,7 @@ impl<B: HostBus> Z180<B> {
             bus,
             bus_error: None,
             instruction_pc: 0,
+            callback_pc: 0,
             indexed_displacement: None,
             cycle_count: 0,
             variant,
@@ -360,6 +392,7 @@ impl<B: HostBus> Z180<B> {
     pub fn reset(&mut self) {
         self.registers = Registers::default();
         self.instruction_pc = 0;
+        self.callback_pc = 0;
         self.indexed_displacement = None;
         let asci_data = [
             self.io_regs[TDR0],
@@ -447,6 +480,7 @@ impl<B: HostBus> Z180<B> {
         self.timing_memory_waits = 0;
         self.timing_io_waits = 0;
 
+        self.callback_pc = self.registers.get(Reg::PC);
         let dma_cycles = self.service_dma();
         if let Some(error) = self.bus_error.take() {
             return Err(error);

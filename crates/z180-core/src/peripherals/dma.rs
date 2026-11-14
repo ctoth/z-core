@@ -153,13 +153,13 @@ impl<B: HostBus> Z180<B> {
             return 0;
         }
         let value = if let Some(index) = self.internal_io_index(port) {
-            if let Err(error) = self.bus.io_read(port) {
+            if let Err(error) = self.bus.io_read_context(port, self.bus_context()) {
                 self.bus_error = Some(error);
                 return 0;
             }
             self.read_internal_io(index)
         } else {
-            match self.bus.io_read(port) {
+            match self.bus.io_read_context(port, self.bus_context()) {
                 Ok(value) => value,
                 Err(error) => {
                     self.bus_error = Some(error);
@@ -182,12 +182,12 @@ impl<B: HostBus> Z180<B> {
             return;
         }
         if let Some(index) = self.internal_io_index(port) {
-            if let Err(error) = self.bus.io_write(port, value) {
+            if let Err(error) = self.bus.io_write_context(port, value, self.bus_context()) {
                 self.bus_error = Some(error);
                 return;
             }
             self.write_internal_io(index, value);
-        } else if let Err(error) = self.bus.io_write(port, value) {
+        } else if let Err(error) = self.bus.io_write_context(port, value, self.bus_context()) {
             self.bus_error = Some(error);
             return;
         }
