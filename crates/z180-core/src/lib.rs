@@ -94,6 +94,11 @@ pub trait HostBus {
     ) -> Result<(), Self::Error> {
         self.io_write(port, value)
     }
+
+    /// Observes an instruction opcode byte before its existing read, with the
+    /// translated/mapped physical address. Excludes operands and HALT dummy reads.
+    /// This is instruction classification, not an M1 pin signal.
+    fn opcode_fetch(&mut self, _phys: u32) {}
 }
 
 #[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
@@ -519,33 +524,33 @@ impl<B: HostBus> Z180<B> {
         }
         self.instruction_pc = pc;
         self.begin_insn_trace(pc);
-        let first_opcode = self.read_logical(pc);
+        let first_opcode = self.read_opcode(pc);
         let (opcode, descriptor, m1_fetches, is_indexed_bit) = match first_opcode {
             0xcb => {
-                let opcode = self.read_logical(pc.wrapping_add(1));
+                let opcode = self.read_opcode(pc.wrapping_add(1));
                 (opcode, Self::CB_OPCODES[usize::from(opcode)], 2, false)
             }
             0xdd => {
-                let opcode = self.read_logical(pc.wrapping_add(1));
+                let opcode = self.read_opcode(pc.wrapping_add(1));
                 if opcode == 0xcb {
                     let displacement = self.read_logical(pc.wrapping_add(2)) as i8;
                     self.indexed_displacement = Some(displacement);
-                    let opcode = self.read_logical(pc.wrapping_add(3));
+                    let opcode = self.read_opcode(pc.wrapping_add(3));
                     (opcode, Self::DDCB_OPCODES[usize::from(opcode)], 2, true)
                 } else {
                     (opcode, Self::DD_OPCODES[usize::from(opcode)], 2, false)
                 }
             }
             0xed => {
-                let opcode = self.read_logical(pc.wrapping_add(1));
+                let opcode = self.read_opcode(pc.wrapping_add(1));
                 (opcode, Self::ED_OPCODES[usize::from(opcode)], 2, false)
             }
             0xfd => {
-                let opcode = self.read_logical(pc.wrapping_add(1));
+                let opcode = self.read_opcode(pc.wrapping_add(1));
                 if opcode == 0xcb {
                     let displacement = self.read_logical(pc.wrapping_add(2)) as i8;
                     self.indexed_displacement = Some(displacement);
-                    let opcode = self.read_logical(pc.wrapping_add(3));
+                    let opcode = self.read_opcode(pc.wrapping_add(3));
                     (opcode, Self::FDCB_OPCODES[usize::from(opcode)], 2, true)
                 } else {
                     (opcode, Self::FD_OPCODES[usize::from(opcode)], 2, false)
@@ -660,6 +665,11 @@ impl<B: HostBus> Z180<B> {
 
     pub fn cycle_count(&self) -> u64 {
         self.cycle_count
+    }
+
+    /// Access the host bus between emulation calls, for callback configuration.
+    pub fn host_bus_mut(&mut self) -> &mut B {
+        &mut self.bus
     }
 
     pub fn halted(&self) -> bool {

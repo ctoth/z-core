@@ -8,10 +8,19 @@ impl<B: HostBus> Z180<B> {
         }
     }
     pub(super) fn read_logical(&mut self, logical: u16) -> u8 {
+        self.read_logical_access(logical, false)
+    }
+    pub(super) fn read_opcode(&mut self, logical: u16) -> u8 {
+        self.read_logical_access(logical, true)
+    }
+    fn read_logical_access(&mut self, logical: u16, opcode: bool) -> u8 {
         self.timing_memory_waits = self
             .timing_memory_waits
             .saturating_add(u32::from((self.io_regs[DCNTL] >> 6) & 0x03));
         let physical = self.map_external_address(self.mmu_translate(logical));
+        if opcode && self.bus_error.is_none() {
+            self.bus.opcode_fetch(physical);
+        }
         let value = self.emulation_mem_read(physical);
         self.capture_insn_byte(logical, value);
         value

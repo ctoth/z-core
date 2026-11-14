@@ -186,6 +186,16 @@ typedef struct {
   int32_t (*io_write)(void*, uint16_t, uint8_t, const z180_bus_context*);
 } z180_context_bus;
 
+/**
+ * Synchronous notification before an instruction opcode read. No same-machine
+ * reentry or unwinding. Copied at registration; user_data/code must remain live
+ * until replaced, unregistered or the machine is destroyed.
+ */
+typedef struct {
+  void *user_data;
+  void (*opcode_fetch)(void*, uint32_t);
+} z180_fetch_observer;
+
 typedef struct {
   uint64_t cycles;
   uint16_t instruction_pc;
@@ -272,6 +282,16 @@ int32_t z180_create_with_context(const z180_config *config,
                                  const z180_context_bus *bus,
                                  z180_machine **out_machine,
                                  z180_error *error);
+
+/**
+ * Replace the opcode-fetch observer. NULL unregisters. Reset/load preserve it.
+ * # Safety
+ * Follow the pointer, callback lifetime, exclusivity and non-reentry contracts.
+ */
+Z180_API
+int32_t z180_set_fetch_observer(z180_machine *handle,
+                                const z180_fetch_observer *observer,
+                                z180_error *error);
 
 /**
  * Destroy an owned handle. NULL is accepted; every other copy becomes invalid.
