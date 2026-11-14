@@ -235,6 +235,14 @@ when actual implementation size calls for it.
 
 ## Surprises
 
+- Windows header verification reported "Bindings changed" while Linux passed.
+  Reproduced using git cat-file --filters with core.autocrlf=true: checkout
+  contained 741 CRLF sequences, generator contained none, and contents were
+  exactly equal after CRLF conversion. Added a path-specific generated-header
+  eol=lf attribute in the existing .gitattributes owner. Kept byte-exact cbindgen
+  verification unchanged. Current Linux C/C++ consumers and Pages browser
+  checks passed before this checkout-only correction.
+
 - Pages browser installation failed before tests: "Cannot install dependencies
   for ubuntu26.04-x64 with Playwright 1.58.2!" The floating ubuntu-latest runner
   selected Ubuntu 26.04. Read Playwright v1.58.2 hostPlatform.ts/nativeDeps.ts:
