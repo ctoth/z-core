@@ -15,6 +15,16 @@ pub(super) struct TraceCapture {
 }
 
 impl<B: HostBus> Z180<B> {
+    /// Number of retained events, without consuming them.
+    pub fn event_count(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Number of retained instruction traces, without consuming them.
+    pub fn insn_trace_count(&self) -> usize {
+        self.insn_trace.len()
+    }
+
     pub fn add_mem_watch(&mut self, base: u32, size: u32, kind: WatchKind) -> WatchId {
         let id = WatchId(self.next_watch_id);
         self.next_watch_id = self.next_watch_id.wrapping_add(1);

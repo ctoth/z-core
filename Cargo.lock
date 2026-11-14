@@ -807,6 +807,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "z180-c"
+version = "0.1.0"
+dependencies = [
+ "z180-core",
+]
+
+[[package]]
 name = "z180-cli"
 version = "0.1.0"
 dependencies = [

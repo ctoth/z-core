@@ -1,0 +1,13 @@
+[package]
+name = "z180-c"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Stable C ABI for the z180-core emulator"
+
+[lib]
+name = "z180"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+z180-core = { path = "../z180-core", features = ["state"] }

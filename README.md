@@ -57,6 +57,7 @@ Build the Python binding or WebAssembly package by following the README in the
 corresponding crate:
 
 - [`z180-core`](crates/z180-core/README.md): native Rust API
+- [`z180-c`](crates/z180-c/README.md): C99/C++ ABI, static and shared libraries
 - [`z180-cli`](crates/z180-cli/README.md): disassembler, ROM runner, SST, and ZEX
 - [`z180-py`](crates/z180-py/README.md): Python API and qns integration
 - [`z180-replay`](crates/z180-replay/README.md): deterministic replay and time travel
