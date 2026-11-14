@@ -1,5 +1,23 @@
 # z180 C ABI
 
+## Immutable callback context
+
+`z180_create_with_context` accepts a `z180_context_bus` instead of `z180_bus`.
+Each memory/I/O callback receives a borrowed `const z180_bus_context *`.
+Copy its values if needed after the callback returns. The usual callback
+lifetime, success/output, error and non-reentry contracts still apply.
+
+`cycles` is the core's accumulated, already charged cycle count before that
+access. All accesses within one instruction or DMA service share that timing
+granularity; this is not hardware bus-cycle timing. DMA charged before CPU
+execution in the same step is included in the later CPU callbacks.
+`pc` is the logical instruction-entry PC for CPU accesses, the interrupted PC
+for interrupt-entry accesses, and the pending CPU PC during DMA. HALT uses the
+pending PC. Reset preserves elapsed cycles and resets the PC to zero. Context
+is supplied for the same callbacks as the legacy interface, including the
+existing notifications for internal I/O. Missing callbacks retain the usual
+unmapped-read/ignored-write behavior. ABI-1 types and entry points are unchanged.
+
 A C99 interface to the Z80180/Z8S180 emulator, also usable from C++11 and
 foreign-language bindings. The public header is [include/z180.h](include/z180.h).
 ABI major version 1 exposes the CPU, board callbacks, memory mapping, serial

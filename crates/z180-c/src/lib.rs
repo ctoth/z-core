@@ -238,6 +238,55 @@ pub unsafe extern "C" fn z180_create(
     out_machine: *mut *mut z180_machine,
     error: *mut z180_error,
 ) -> i32 {
+    // SAFETY: same contract as create_impl; NULL selects legacy callbacks.
+    unsafe {
+        create_impl(
+            config,
+            regions,
+            region_count,
+            bus,
+            ptr::null(),
+            out_machine,
+            error,
+        )
+    }
+}
+
+/// Create using immutable cycle/PC callbacks instead of the legacy bus.
+/// # Safety
+/// Same pointer, lifetime, exclusivity and non-reentry contract as z180_create.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn z180_create_with_context(
+    config: *const z180_config,
+    regions: *const z180_region,
+    region_count: usize,
+    bus: *const z180_context_bus,
+    out_machine: *mut *mut z180_machine,
+    error: *mut z180_error,
+) -> i32 {
+    // SAFETY: caller supplies the same foreign-storage contract as z180_create.
+    unsafe {
+        create_impl(
+            config,
+            regions,
+            region_count,
+            ptr::null(),
+            bus,
+            out_machine,
+            error,
+        )
+    }
+}
+
+unsafe fn create_impl(
+    config: *const z180_config,
+    regions: *const z180_region,
+    region_count: usize,
+    bus: *const z180_bus,
+    context_bus: *const z180_context_bus,
+    out_machine: *mut *mut z180_machine,
+    error: *mut z180_error,
+) -> i32 {
     // SAFETY: foreign storage/lifetimes are the caller's contract; helpers validate shape.
     unsafe {
         boundary(error, || {
@@ -270,6 +319,11 @@ pub unsafe extern "C" fn z180_create(
                 CBus {
                     callbacks,
                     unmapped_read: config.unmapped_read,
+                    context_callbacks: if context_bus.is_null() {
+                        None
+                    } else {
+                        Some(input(context_bus, 1)?[0])
+                    },
                 },
             )
             .map_err(|e| fail(Z180_INVALID_CONFIG, e))?;

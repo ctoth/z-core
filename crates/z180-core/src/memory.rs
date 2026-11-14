@@ -267,7 +267,12 @@ impl Memory {
         }
     }
 
-    pub(crate) fn read<B: HostBus>(&mut self, bus: &mut B, phys: u32) -> Result<u8, B::Error> {
+    pub(crate) fn read<B: HostBus>(
+        &mut self,
+        bus: &mut B,
+        phys: u32,
+        context: crate::BusContext,
+    ) -> Result<u8, B::Error> {
         let Some((page, in_page)) = self.lookup(phys) else {
             return Ok(self.unmapped_read);
         };
@@ -286,7 +291,7 @@ impl Memory {
                 .and_then(|bytes| bytes.get(offset + in_page))
                 .copied()
                 .unwrap_or(self.unmapped_read),
-            Page::External => return bus.mem_read(phys),
+            Page::External => return bus.mem_read_context(phys, context),
             Page::Unmapped => self.unmapped_read,
         })
     }
@@ -296,6 +301,7 @@ impl Memory {
         bus: &mut B,
         phys: u32,
         value: u8,
+        context: crate::BusContext,
     ) -> Result<bool, B::Error> {
         let Some((page, in_page)) = self.lookup(phys) else {
             return Ok(false);
@@ -313,7 +319,7 @@ impl Memory {
                 false
             }
             Page::External => {
-                bus.mem_write(phys, value)?;
+                bus.mem_write_context(phys, value, context)?;
                 false
             }
             Page::Rom { .. } => true,

@@ -166,6 +166,26 @@ typedef struct {
   int32_t (*io_write)(void*, uint16_t, uint8_t);
 } z180_bus;
 
+/**
+ * Snapshot valid for the duration of a context callback. Copy it to retain it.
+ */
+typedef struct {
+  uint64_t cycles;
+  uint16_t pc;
+} z180_bus_context;
+
+/**
+ * Alternative callbacks with immutable access context. Same lifetime, error and
+ * non-reentry rules as z180_bus. No callback may retain the context pointer.
+ */
+typedef struct {
+  void *user_data;
+  int32_t (*mem_read)(void*, uint32_t, const z180_bus_context*, uint8_t*);
+  int32_t (*mem_write)(void*, uint32_t, uint8_t, const z180_bus_context*);
+  int32_t (*io_read)(void*, uint16_t, const z180_bus_context*, uint8_t*);
+  int32_t (*io_write)(void*, uint16_t, uint8_t, const z180_bus_context*);
+} z180_context_bus;
+
 typedef struct {
   uint64_t cycles;
   uint16_t instruction_pc;
@@ -239,6 +259,19 @@ int32_t z180_create(const z180_config *config,
                     const z180_bus *bus,
                     z180_machine **out_machine,
                     z180_error *error);
+
+/**
+ * Create using immutable cycle/PC callbacks instead of the legacy bus.
+ * # Safety
+ * Same pointer, lifetime, exclusivity and non-reentry contract as z180_create.
+ */
+Z180_API
+int32_t z180_create_with_context(const z180_config *config,
+                                 const z180_region *regions,
+                                 size_t region_count,
+                                 const z180_context_bus *bus,
+                                 z180_machine **out_machine,
+                                 z180_error *error);
 
 /**
  * Destroy an owned handle. NULL is accepted; every other copy becomes invalid.
