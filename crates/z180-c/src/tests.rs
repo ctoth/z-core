@@ -82,6 +82,49 @@ fn invalid_shapes_do_not_create_slices_or_mutate_outputs() {
 }
 
 #[test]
+fn save_state_accepts_uninitialized_storage() {
+    unsafe {
+        let machine = new_machine();
+        let mut size = 0;
+        assert_eq!(
+            z180_save_state_size(machine, &mut size, ptr::null_mut()),
+            Z180_OK
+        );
+        let mut storage = Vec::<mem::MaybeUninit<u8>>::with_capacity(size);
+        let mut written = usize::MAX;
+        assert_eq!(
+            z180_save_state(
+                machine,
+                storage.as_mut_ptr().cast(),
+                1,
+                &mut written,
+                ptr::null_mut()
+            ),
+            Z180_BUFFER_TOO_SMALL
+        );
+        assert_eq!(written, 0);
+        assert_eq!(
+            z180_save_state(
+                machine,
+                storage.as_mut_ptr().cast(),
+                size,
+                &mut written,
+                ptr::null_mut()
+            ),
+            Z180_OK
+        );
+        assert_eq!(written, size);
+        storage.set_len(size);
+        let saved: Vec<u8> = storage.iter().map(|b| b.assume_init()).collect();
+        assert_eq!(
+            z180_load_state(machine, saved.as_ptr(), saved.len(), ptr::null_mut()),
+            Z180_OK
+        );
+        z180_destroy(machine);
+    }
+}
+
+#[test]
 fn diagnostic_is_nul_terminated_utf8_and_success_clears_it() {
     unsafe {
         let mut error = mem::MaybeUninit::<z180_error>::uninit();

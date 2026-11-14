@@ -13,7 +13,12 @@ generated C header, and focused Rust boundary tests are implemented locally.
 Core additions are queue counts and safe watch-ID conversion. Implementation,
 generated header, C example, documentation, and existing Windows/Linux CI
 integration are implemented and published in
-[PR #47](https://github.com/ctoth/z-core/pull/47). Remote CI is running.
+[PR #47](https://github.com/ctoth/z-core/pull/47). All current-head CI checks
+passed on Windows and Ubuntu 24.04, including the independent C/C++ static/shared
+consumers, Rust formatting/Clippy/workspace tests, emulator conformance gates,
+Python tests, reference differential tests, and the Linux browser/TypeScript
+checks. The Pages build and packaged-site browser test also passed. Deployment
+is intentionally skipped for a PR. The PR remains open and is not merged.
 
 Verified locally with the explicitly authored test tasks:
 - `cargo test -p z180-c --lib tests::`
@@ -24,8 +29,18 @@ including actual callbacks, prior effects on host failure, ROM copying, independ
 machines, debug drain sizing, serial RX/TX, event loss, state buffer sizing,
 state-restored watches, callback/mapper preservation, and disassembly. The board
 example ran with PC=1 and cycles=6. Header regeneration matched with cbindgen
-`--verify`; `git diff --check` was clean. No Linux execution or full PR CI has
-completed yet; do not claim those checks passed.
+`--verify`; `git diff --check` was clean. Full remote verification subsequently
+passed on the published source head, as recorded above.
+
+Review of PR #47 (2026-11-14) found one blocking defect: `z180_save_state`
+built a `&mut [u8]` over caller storage that the README allows to be
+uninitialized (consumer.c passes a fresh malloc), which is undefined behaviour.
+Fixed test-first: `tests::save_state_accepts_uninitialized_storage` failed under
+`MIRIFLAGS=-Zmiri-recursive-validation cargo +nightly miri test -p z180-c --lib
+tests::save_state_accepts_uninitialized_storage` with "constructing invalid value
+of type &mut [u8] ... encountered uninitialized memory", and passes after the
+fix. A plain `cargo test` cannot detect this; only Miri with recursive
+validation does. Miri's first run downloads sysroot crates from crates.io.
 
 Read: workspace Cargo.toml and README; core README and Cargo.toml;
 core lib.rs, access.rs, debug.rs, memory.rs, registers.rs, state.rs;
@@ -265,7 +280,10 @@ when actual implementation size calls for it.
 - lib.rs:579 restores registers after a handler bus failure, not every side effect.
 - access.rs:103 and :193 contain the internal-I/O duplicate host accesses.
 - debug.rs:58 and :95 drain the entire queue; dropping early loses the suffix.
-- state.rs:134 deliberately allows partial output on a short save buffer.
+- state.rs:134 deliberately allows partial output on a short save buffer. The C
+  ABI no longer uses it: `save_state_to_slice` needs an initialized `&mut [u8]`,
+  but C output storage may be uninitialized. `z180_save_state` serializes with
+  `save_state_into` and copies raw bytes, so a short buffer is left unchanged.
 - lib.rs:346 reset does not reset cycle_count; keep that behavior in C.
 - WatchId's payload is private (lib.rs:95); safe conversion needs a core accessor.
 - One read command used unsupported shell brace expansion; it failed at parsing
@@ -274,9 +292,9 @@ when actual implementation size calls for it.
 ## Next step
 
 Q explicitly authorized direct Codex commit/push/PR publication with "I do"
-in response to the permission question. Commit the substantive changes with
-this note, push and open the PR in the same turn, then watch and repair remote CI.
-Do not infer merge authority.
+in response to the permission question. The save-state review fix is pushed to
+PR #47; watch its CI and repair red. Await Q's merge instruction; do not infer
+merge authority.
 Do not stage paper PDFs or images. This note replaces the original c-abi.md so
 there remains one living note for the task.
 

@@ -77,14 +77,6 @@ unsafe fn input<'a, T>(data: *const T, len: usize) -> Result<&'a [T]> {
         Ok(unsafe { slice::from_raw_parts(data, len) })
     }
 }
-unsafe fn bytes_mut<'a>(data: *mut u8, len: usize) -> Result<&'a mut [u8]> {
-    check(data, len)?;
-    if len == 0 {
-        Ok(&mut [])
-    } else {
-        Ok(unsafe { slice::from_raw_parts_mut(data, len) })
-    }
-}
 fn boolean(value: u8) -> Result<bool> {
     match value {
         0 => Ok(false),
@@ -1257,7 +1249,7 @@ pub unsafe extern "C" fn z180_save_state_size(
     }
 }
 
-/// Save into caller storage. Failure sets written=0; a short buffer may contain a partial payload.
+/// Save into caller storage. Failure sets written=0 and leaves storage unchanged.
 ///
 /// # Safety
 /// Follow the pointer, lifetime, exclusivity, and callback contracts in the crate documentation.
@@ -1274,20 +1266,16 @@ pub unsafe extern "C" fn z180_save_state(
         machine(handle, error, |cpu| {
             output(out_written)?;
             out_written.write(0);
-            let bytes = bytes_mut(data, capacity)?;
-            let written = cpu
-                .save_state_to_slice(bytes)
-                .map_err(|e| {
-                    fail(
-                        match e {
-                            SaveStateError::BufferTooSmall => Z180_BUFFER_TOO_SMALL,
-                            SaveStateError::Serialize => Z180_INTERNAL_ERROR,
-                        },
-                        e,
-                    )
-                })?
-                .len();
-            out_written.write(written);
+            check(data, capacity)?;
+            // Storage may be uninitialized, so serialize separately and copy raw bytes.
+            let mut bytes = Vec::new();
+            cpu.save_state_into(&mut bytes)
+                .map_err(|e| fail(Z180_INTERNAL_ERROR, e))?;
+            if capacity < bytes.len() {
+                return Err(fail(Z180_BUFFER_TOO_SMALL, SaveStateError::BufferTooSmall));
+            }
+            ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+            out_written.write(bytes.len());
             Ok(())
         })
     }

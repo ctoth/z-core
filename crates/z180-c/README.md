@@ -108,7 +108,7 @@ Ordinary outputs are unchanged on failure, with these explicit exceptions:
 | create | Valid out-machine is set to NULL before construction |
 | step/run | Charged cycle delta is written on host error |
 | RAM enumeration, event/trace drains | Required count is written on a short buffer |
-| save_state | Written length is zero; a short buffer can contain a partial payload |
+| save_state | Written length is zero; storage is unchanged |
 | disassemble | Required text capacity, including NUL, is written on a short buffer |
 
 The optional error record is always updated when valid. Invalid error-record

@@ -682,7 +682,7 @@ int32_t z180_drain_insn_trace(z180_machine *handle,
 Z180_API int32_t z180_save_state_size(z180_machine *handle, size_t *out_size, z180_error *error);
 
 /**
- * Save into caller storage. Failure sets written=0; a short buffer may contain a partial payload.
+ * Save into caller storage. Failure sets written=0 and leaves storage unchanged.
  *
  * # Safety
  * Follow the pointer, lifetime, exclusivity, and callback contracts in the crate documentation.
