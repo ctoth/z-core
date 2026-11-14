@@ -12,7 +12,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          # Playwright 1.58.2 supports Ubuntu 24.04, not Ubuntu 26.04.
+          - ubuntu-24.04
           - windows-latest
     steps:
       - uses: actions/checkout@v7.0.1

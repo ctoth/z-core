@@ -235,6 +235,14 @@ when actual implementation size calls for it.
 
 ## Surprises
 
+- Pages browser installation failed before tests: "Cannot install dependencies
+  for ubuntu26.04-x64 with Playwright 1.58.2!" The floating ubuntu-latest runner
+  selected Ubuntu 26.04. Read Playwright v1.58.2 hostPlatform.ts/nativeDeps.ts:
+  Ubuntu 24.04 is supported and 26.04 is not. Pin only the two browser-running
+  jobs (CI Linux matrix and Pages build) to ubuntu-24.04; retain every test.
+  Master has no branch-protection required-status-check configuration to rename.
+  Formatting and Clippy passed after the source-ending correction.
+
 - First PR CI run found surplus blank lines at EOF in binding bus.rs, lib.rs,
   and types.rs. The formatter-output application had trimmed its comparison
   range and left the old trailing blank line outside the replaced range.
