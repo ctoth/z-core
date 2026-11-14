@@ -94,6 +94,20 @@ pub enum IrqSource {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct WatchId(u64);
 
+impl WatchId {
+    /// Returns the identifier retained in save states.
+    #[must_use]
+    pub const fn to_u64(self) -> u64 {
+        self.0
+    }
+
+    /// Reconstructs a nonzero identifier; it need not name a current watch.
+    #[must_use]
+    pub const fn from_u64(value: u64) -> Option<Self> {
+        if value == 0 { None } else { Some(Self(value)) }
+    }
+}
+
 #[cfg_attr(feature = "state", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WatchKind {

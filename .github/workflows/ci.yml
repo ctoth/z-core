@@ -12,7 +12,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          # Playwright 1.58.2 supports Ubuntu 24.04, not Ubuntu 26.04.
+          - ubuntu-24.04
           - windows-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -32,6 +33,12 @@ jobs:
         run: cargo clippy -p z180-core --all-targets --features state -- -D warnings
       - name: Run tests
         run: cargo test --workspace
+      - name: Install C header generator
+        run: cargo install cbindgen --version 0.29.4 --locked
+      - name: Check generated C header
+        run: cbindgen --config crates/z180-c/cbindgen.toml --crate z180-c --output crates/z180-c/include/z180.h --verify
+      - name: Exercise C and C++ consumers with static and shared linking
+        run: python crates/z180-c/tests/consumer.py
       - name: Run independent DAA conformance gate
         run: cargo run -p z180-cli --release -- sst --dir tests/sst/v1 --only 27
       - name: Run state feature tests

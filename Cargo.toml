@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/z180-c",
     "crates/z180-cli",
     "crates/z180-core",
     "crates/z180-py",

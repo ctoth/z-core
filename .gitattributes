@@ -1,2 +1,4 @@
 crates/z180-cli/tests/fixtures/*.bin binary
 crates/z180-cli/tests/fixtures/*.golden text eol=lf
+crates/z180-c/include/*.h text eol=lf
+crates/z180-c/cbindgen.toml text eol=lf
