@@ -2,7 +2,22 @@
 
 All notable changes to z-core are documented in this file.
 
-## Unreleased
+## 0.1.1 - 2026-11-14
+
+### C library
+
+- Added `z180-c`, a stable C99 ABI usable from C++ and other bindings: opaque
+  machine handles, copied configuration and ROM, synchronous board callbacks,
+  caller-owned buffers, explicit errors, panic containment, and a generated
+  `z180.h`, covering execution, registers, interrupts, serial peripherals,
+  memory mapping, debugging, disassembly, and save states.
+- Added bus callbacks that receive the immutable cycle and PC of each access.
+- Added synchronous opcode-fetch observation with prefix, indexed
+  displacement, HALT, SLP, interrupt, and DMA classification, without extra
+  memory reads.
+- Each release publishes prebuilt static libraries for x86_64 Linux GNU,
+  x86_64 Windows GNU, and universal macOS 11+, with their native link flags and
+  `SHA256SUMS`.
 
 ### Replay and verification
 

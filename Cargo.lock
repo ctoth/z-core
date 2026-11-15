@@ -798,7 +798,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "z180"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "js-sys",
  "serde-wasm-bindgen",
@@ -808,14 +808,14 @@ dependencies = [
 
 [[package]]
 name = "z180-c"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "z180-core",
 ]
 
 [[package]]
 name = "z180-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "z180-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "postcard",
  "proptest",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "z180-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "z180-core",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "z180-replay"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "serde",
