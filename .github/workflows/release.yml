@@ -1,0 +1,94 @@
+name: C library release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: x86_64-linux-gnu, os: ubuntu-22.04, targets: x86_64-unknown-linux-gnu, cc: cc }
+          - { name: x86_64-windows-gnu, os: ubuntu-22.04, targets: x86_64-pc-windows-gnu, cc: x86_64-w64-mingw32-gcc }
+          - { name: universal-apple-darwin, os: macos-latest, targets: aarch64-apple-darwin x86_64-apple-darwin, cc: cc }
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install MinGW
+        if: matrix.name == 'x86_64-windows-gnu'
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - name: Install Rust targets
+        run: rustup target add ${{ matrix.targets }}
+      - name: Build static libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          archives=()
+          libs=
+          for t in ${{ matrix.targets }}; do
+            cargo rustc -p z180-c --lib --release --locked --target "$t" --crate-type staticlib \
+              -- --print native-static-libs 2> "rustc-$t.log" || { cat "rustc-$t.log"; exit 1; }
+            l=$(sed -n 's/.*native-static-libs: //p' "rustc-$t.log")
+            [ -n "$l" ] || { cat "rustc-$t.log"; echo "rustc reported no native static libraries" >&2; exit 1; }
+            [ -z "$libs" ] || [ "$libs" = "$l" ] || { echo "targets need different native libraries: $libs / $l" >&2; exit 1; }
+            libs=$l
+            archives+=("target/$t/release/libz180.a")
+          done
+          case "$GITHUB_REF" in refs/tags/v*) ver=${GITHUB_REF_NAME#v} ;; *) ver=dev ;; esac
+          pkg=z180-c-$ver-${{ matrix.name }}
+          mkdir -p "$pkg/lib" "$pkg/include"
+          if [ ${#archives[@]} -gt 1 ]; then lipo -create "${archives[@]}" -output "$pkg/lib/libz180.a"
+          else cp "${archives[0]}" "$pkg/lib/libz180.a"; fi
+          cp crates/z180-c/include/z180.h "$pkg/include/"
+          echo "$libs" > "$pkg/native-static-libs.txt"
+          cp LICENSE-MIT LICENSE-APACHE "$pkg/"
+          tar -czf "$pkg.tar.gz" "$pkg"
+          echo "PKG=$pkg" >> "$GITHUB_ENV"
+      - name: Link the authored consumer against the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ matrix.cc }} -std=c99 -Wall -Wextra -Werror -DZ180_STATIC -I "$PKG/include" \
+            crates/z180-c/tests/consumer.c "$PKG/lib/libz180.a" $(cat "$PKG/native-static-libs.txt") -o consumer
+          if [ "${{ matrix.name }}" != x86_64-windows-gnu ]; then ./consumer; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: ${{ env.PKG }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: The tag is the C library's version
+        run: |
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/z180-c/Cargo.toml)
+          [ "v$ver" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but z180-c is $ver" >&2; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" *.tar.gz SHA256SUMS --title "z180-c $GITHUB_REF_NAME" \
+            --notes "Static z180-c libraries with z180.h. Link lib/libz180.a with the flags in native-static-libs.txt and define Z180_STATIC."
