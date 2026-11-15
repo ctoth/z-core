@@ -21,6 +21,11 @@ Let C hosts (first: blmemu) link z-core without a Rust toolchain. Q chose "prebu
 - PR 52: all three package jobs passed; the consumer linked with only native-static-libs.txt and ran on Linux and macOS. Reported flags: Linux `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc`; Windows GNU `-lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp`; macOS `-lSystem -lc -lm`.
 - blmemu built natively on Windows (MinGW) from the PR's Windows package with no cargo on PATH; its board_test and private-firmware session_test passed.
 
+## Surprises
+
+- v0.1.0 already exists: z-core's first release tag (2026-07-21), before the C library. The agent had checked only `gh release list` (empty) and wrongly reported no tags. The published tag was not moved. The C library ships as 0.1.1 (Q, 2026-11-14: "0.1.1 pls"): all crate versions, pyproject, Cargo.lock and both uv.lock `z180` entries bumped, CHANGELOG "Unreleased" became "0.1.1" with a C library section. Branch release-0.1.1.
+- `uv lock` on this machine writes the global uv config into lock files (exclude-newer P14D, unrelated package overrides, lock revision 5, a changed pytest specifier). Those were reverted; only the `z180` version line was edited.
+
 ## Next step
 
-PR, CI green, merge, then tag v0.1.0 (matches crates/z180-c/Cargo.toml) and pin blmemu to the release's SHA256SUMS.
+PR 52 merged. Release 0.1.1 PR, CI green, merge, tag v0.1.1 on the merge commit, then pin blmemu to the release's SHA256SUMS.

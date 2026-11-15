@@ -1,6 +1,6 @@
 [package]
 name = "z180"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "WebAssembly bindings for the z-core Z180 emulator"
 license = "MIT OR Apache-2.0"
