@@ -18,6 +18,30 @@ is supplied for the same callbacks as the legacy interface, including the
 existing notifications for internal I/O. Missing callbacks retain the usual
 unmapped-read/ignored-write behavior. ABI-1 types and entry points are unchanged.
 
+## Opcode-fetch observation
+
+Register a `z180_fetch_observer` with `z180_set_fetch_observer`. NULL unregisters;
+registration is copied and survives reset/load. Callback code/user_data must live
+until replacement, unregistration or destruction. No same-machine reentry or
+unwinding is allowed. The observer cannot fail; normal bus errors are unchanged.
+
+The observer runs immediately before each existing instruction opcode read, with
+its physical address after MMU and external mapping, including core-owned RAM/ROM.
+It adds no reads. Prefixes and subsequent opcode bytes are reported; immediate
+operands, indexed displacement and data reads are excluded. DD/FD CB d op reports
+DD/FD, CB and op, but not d. This is instruction classification, not the M1 pin
+or R counter. A notification describes an attempted fetch even if its read fails;
+no later notification is emitted after that failure in the step.
+
+HALT's instruction byte is reported once; subsequent dummy reads at the next PC
+are excluded because they execute no instruction. SLP reports its two opcode
+bytes; sleeping emits no reads. Interrupt acknowledge, stack/vector accesses,
+NMI's discarded read and DMA are excluded. The handler's first opcode is reported
+when it executes in the next step. The core's fixed INT0 mode-0 restart does not
+read an acknowledge opcode through memory, so no synthetic fetch is emitted.
+These distinctions follow UM0050 pp.32-33, 70-75 and Tables 48-50.
+Existing ABI-1 bus layouts, signatures and memory-read order/count are unchanged.
+
 A C99 interface to the Z80180/Z8S180 emulator, also usable from C++11 and
 foreign-language bindings. The public header is [include/z180.h](include/z180.h).
 ABI major version 1 exposes the CPU, board callbacks, memory mapping, serial

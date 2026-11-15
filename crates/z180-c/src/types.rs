@@ -103,6 +103,15 @@ pub struct z180_context_bus {
     pub io_write:
         Option<unsafe extern "C" fn(*mut c_void, u16, u8, *const z180_bus_context) -> i32>,
 }
+/// Synchronous notification before an instruction opcode read. No same-machine
+/// reentry or unwinding. Copied at registration; user_data/code must remain live
+/// until replaced, unregistered or the machine is destroyed.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct z180_fetch_observer {
+    pub user_data: *mut c_void,
+    pub opcode_fetch: Option<unsafe extern "C" fn(*mut c_void, u32)>,
+}
 /// Caller-owned diagnostic; optional on every fallible call. UTF-8, NUL terminated.
 #[repr(C)]
 pub struct z180_error {

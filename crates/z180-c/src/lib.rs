@@ -324,6 +324,7 @@ unsafe fn create_impl(
                     } else {
                         Some(input(context_bus, 1)?[0])
                     },
+                    fetch_observer: z180_fetch_observer::default(),
                 },
             )
             .map_err(|e| fail(Z180_INVALID_CONFIG, e))?;
@@ -331,6 +332,29 @@ unsafe fn create_impl(
                 cpu,
                 poisoned: false,
             })));
+            Ok(())
+        })
+    }
+}
+
+/// Replace the opcode-fetch observer. NULL unregisters. Reset/load preserve it.
+/// # Safety
+/// Follow the pointer, callback lifetime, exclusivity and non-reentry contracts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn z180_set_fetch_observer(
+    handle: *mut z180_machine,
+    observer: *const z180_fetch_observer,
+    error: *mut z180_error,
+) -> i32 {
+    // SAFETY: caller provides valid foreign storage and callback lifetime.
+    unsafe {
+        machine(handle, error, |cpu| {
+            let observer = if observer.is_null() {
+                z180_fetch_observer::default()
+            } else {
+                input(observer, 1)?[0]
+            };
+            cpu.host_bus_mut().fetch_observer = observer;
             Ok(())
         })
     }

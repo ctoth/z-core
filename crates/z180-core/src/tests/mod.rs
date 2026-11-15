@@ -1,6 +1,7 @@
 mod access;
 mod bus_context;
 mod debug;
+mod fetch;
 mod instructions;
 mod interrupts;
 mod io_dma;

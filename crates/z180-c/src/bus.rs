@@ -1,10 +1,11 @@
-use crate::{z180_bus, z180_bus_context, z180_context_bus};
+use crate::{z180_bus, z180_bus_context, z180_context_bus, z180_fetch_observer};
 use z180_core::{BusContext, HostBus};
 
 pub(crate) struct CBus {
     pub callbacks: z180_bus,
     pub unmapped_read: u8,
     pub context_callbacks: Option<z180_context_bus>,
+    pub fetch_observer: z180_fetch_observer,
 }
 
 fn result(code: i32) -> Result<(), i32> {
@@ -81,6 +82,13 @@ impl HostBus for CBus {
             result(unsafe { callback(bus.user_data, address, value, &context) })?;
         }
         Ok(())
+    }
+
+    fn opcode_fetch(&mut self, address: u32) {
+        if let Some(callback) = self.fetch_observer.opcode_fetch {
+            // SAFETY: registration requires callback lifetime and non-reentry.
+            unsafe { callback(self.fetch_observer.user_data, address) };
+        }
     }
 
     fn mem_read(&mut self, address: u32) -> Result<u8, i32> {

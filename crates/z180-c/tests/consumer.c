@@ -319,6 +319,48 @@ static void exercise_context(void) {
     z180_destroy(cpu);
 }
 
+struct fetch_board { uint32_t fetches[16], reads[32]; size_t nf, nr; int32_t failure; };
+static void observe_fetch(void *data, uint32_t address) {
+    struct fetch_board *b = (struct fetch_board *)data;
+    assert(b->nf < 16); b->fetches[b->nf++] = address;
+}
+static int32_t fetch_read(void *data, uint32_t address, uint8_t *value) {
+    const uint8_t program[] = {0x3e, 0x12, 0xdd, 0xcb, 1, 0x46, 0x76};
+    struct fetch_board *b = (struct fetch_board *)data;
+    assert(b->nr < 32); b->reads[b->nr++] = address;
+    if (address == 0 || address == 2 || address == 3 || address == 5 || address == 6)
+        assert(b->nf && b->fetches[b->nf - 1] == address);
+    *value = address < sizeof program ? program[address] : 0;
+    return b->failure;
+}
+static void exercise_fetch_observer(void) {
+    struct fetch_board board = {{0}, {0}, 0, 0, 0};
+    z180_bus bus = {&board, fetch_read, NULL, NULL, NULL};
+    z180_fetch_observer observer = {&board, observe_fetch};
+    z180_region region = {0, 65536, Z180_REGION_EXTERNAL, NULL, 0};
+    z180_config config; z180_error error; z180_machine *cpu = NULL; uint64_t cycles;
+    const uint32_t fetches[] = {0, 2, 3, 5, 6};
+    const uint32_t reads[] = {0, 1, 2, 3, 4, 5, 0x101, 6, 7};
+    size_t i;
+    OK(z180_config_init(&config, &error));
+    OK(z180_create(&config, &region, 1, &bus, &cpu, &error));
+    OK(z180_set_fetch_observer(cpu, &observer, &error));
+    OK(z180_reg_set(cpu, Z180_REG_IX, 0x100, &error));
+    for (i = 0; i < 4; i++) OK(z180_step(cpu, &cycles, &error));
+    assert(board.nf == sizeof fetches / sizeof *fetches && board.nr == sizeof reads / sizeof *reads);
+    assert(memcmp(board.fetches, fetches, sizeof fetches) == 0);
+    assert(memcmp(board.reads, reads, sizeof reads) == 0);
+    OK(z180_reset(cpu, &error)); board.failure = -84;
+    assert(z180_step(cpu, &cycles, &error) == Z180_HOST_ERROR);
+    assert(error.host_code == -84 && board.nf == 6 && board.nr == 10);
+    OK(z180_set_fetch_observer(cpu, NULL, &error));
+    OK(z180_reset(cpu, &error)); board.failure = 0;
+    /* Use unmapped PC so fetch_read's assertion does not require an observer. */
+    OK(z180_reg_set(cpu, Z180_REG_PC, 0x200, &error));
+    OK(z180_step(cpu, &cycles, &error)); assert(board.nf == 6);
+    z180_destroy(cpu);
+}
+
 int main(void) {
     assert(z180_abi_version() == 1);
     exercise_machine();
@@ -326,6 +368,7 @@ int main(void) {
     exercise_serial_and_loss();
     exercise_decode_and_creation_errors();
     exercise_context();
+    exercise_fetch_observer();
     puts("C ABI consumer passed");
     return 0;
 }

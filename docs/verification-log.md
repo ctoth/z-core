@@ -2,6 +2,10 @@
 
 | Verified fact | UM0050 section or table | Date |
 |---|---|---|
+| DMA transfers memory/I/O data without CPU intervention; fetch observation excludes DMA reads/writes | DMA Controller, pp.90-91 | 2026-11-14 |
+| Fetch observation classifies decoder opcode bytes, including the final DD/FD CB opcode, separately from displacement, operand and data reads; it is not an R-counter/M1-pin count | Tables 48-50, pp.247-250; TRAP Figures 32-33, pp.71-72 | 2026-11-14 |
+| HALT repeats dummy reads at the following opcode address; SLEEP stops CPU bus activity; neither idle state executes another instruction opcode | HALT and SLEEP modes, pp.31-33, Figure 20 | 2026-11-14 |
+| NMI acknowledge includes a discarded PC read and stack writes before handler execution; these are not handler instruction fetches. INT0 mode 0 takes an instruction from the data bus, not the memory PC | External Interrupts, pp.73-75, Figure 35 | 2026-11-14 |
 | Manual title: *Z8018x Family MPU User Manual* | Cover, UM005004-0918 | 2026-07-20 |
 | Manual revision: UM005004-0918 (September 2018) | Cover and document footer | 2026-07-20 |
 | Official source: https://www.zilog.com/docs/z180/um0050.pdf | Zilog documentation listing for UM0050 | 2026-07-20 |
