@@ -16,6 +16,11 @@ Let C hosts (first: blmemu) link z-core without a Rust toolchain. Q chose "prebu
 - No submodules checked out: the SST corpus is not needed to build the library.
 - The package's link check uses only native-static-libs.txt, proving the shipped flags suffice.
 
+## Verification
+
+- PR 52: all three package jobs passed; the consumer linked with only native-static-libs.txt and ran on Linux and macOS. Reported flags: Linux `-lgcc_s -lutil -lrt -lpthread -lm -ldl -lc`; Windows GNU `-lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp`; macOS `-lSystem -lc -lm`.
+- blmemu built natively on Windows (MinGW) from the PR's Windows package with no cargo on PATH; its board_test and private-firmware session_test passed.
+
 ## Next step
 
 PR, CI green, merge, then tag v0.1.0 (matches crates/z180-c/Cargo.toml) and pin blmemu to the release's SHA256SUMS.
