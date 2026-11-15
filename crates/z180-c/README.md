@@ -73,6 +73,14 @@ the header and link the Rust standard library's native dependencies. The
 `Z180_BUILD` selects the export declaration when needed by a producer; consumers
 normally leave it undefined.
 
+Each `v*` release also publishes prebuilt static libraries, so C hosts need no
+Rust toolchain: `z180-c-VERSION-x86_64-linux-gnu.tar.gz`,
+`z180-c-VERSION-x86_64-windows-gnu.tar.gz` (MinGW) and
+`z180-c-VERSION-universal-apple-darwin.tar.gz` (arm64 and x86_64, macOS 11+),
+with `SHA256SUMS`. Each holds `lib/libz180.a`, `include/z180.h`, the licences,
+and `native-static-libs.txt`: the flags to link after the archive. Define
+`Z180_STATIC`.
+
 [examples/board.c](examples/board.c) is a complete program: configure ROM and
 RAM, create a machine, step, inspect PC, and destroy it. On Linux:
 
